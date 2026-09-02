@@ -27,7 +27,10 @@ class CliRun:
 
     @property
     def document(self) -> dict[str, Any]:
+        """Every document a run emits is checked against the schema, not only the ones a
+        test remembers to check."""
         parsed: dict[str, Any] = json.loads(self.stdout)
+        validate_document(parsed)
         return parsed
 
     @property
@@ -89,4 +92,5 @@ def sole_json_document(stdout: str) -> dict[str, Any]:
     document, end = json.JSONDecoder().raw_decode(stdout)
     assert stdout[end:].strip() == "", f"stdout carried trailing output: {stdout[end:]!r}"
     parsed: dict[str, Any] = document
+    validate_document(parsed)
     return parsed

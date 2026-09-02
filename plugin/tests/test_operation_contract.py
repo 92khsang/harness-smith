@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from harness_smith.operations import DECLARED_OPERATIONS, REGISTRY
-from harness_smith.result import EXIT_CODE_BY_STATUS
+from harness_smith.vocabulary import EXIT_CODE_BY_STATUS
 from tests.support import make_repository, run_cli, snapshot_tree, validate_document
 
 MINIMAL_INVOCATION: dict[str, tuple[str, ...]] = {

@@ -1,4 +1,8 @@
-"""The vocabulary of the OperationResult envelope: modes, statuses, exit codes, subjects."""
+"""The vocabulary of the OperationResult envelope: modes, statuses, exit codes, subjects.
+
+These terms have one home so that a name has one import path. The envelope that carries them
+lives in ``result``, which depends on this module and on ``diagnostics``.
+"""
 
 from __future__ import annotations
 

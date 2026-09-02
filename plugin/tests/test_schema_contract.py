@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
+import jsonschema
 import pytest
 
 from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
-from harness_smith.envelope import Mode, Severity, Status, SubjectKind
 from harness_smith.operations import DECLARED_OPERATIONS
 from harness_smith.result import ChangeAction, PatchFormat
-from tests.support import schema
-
-CAPABILITY_VALUES = ["managed", "observed-only", "unsupported"]
+from harness_smith.vocabulary import Mode, Severity, Status, SubjectKind
+from tests.support import schema, validate_document
 
 
 def enum_at(pointer: str) -> list[str]:
@@ -36,7 +36,6 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
         ("$defs/subject/properties/kind/enum", [member.value for member in SubjectKind]),
         ("$defs/change/properties/action/enum", [member.value for member in ChangeAction]),
         ("$defs/patch/properties/format/enum", [member.value for member in PatchFormat]),
-        ("$defs/capabilityValue/enum", CAPABILITY_VALUES),
     ],
 )
 def test_schema_enums_match_the_implementation(pointer: str, expected: list[str]) -> None:
@@ -77,3 +76,121 @@ def test_no_object_in_the_schema_accepts_unrecognised_keys() -> None:
     ]
 
     assert permissive == []
+
+
+POPULATED_SURFACE_AUDIT: dict[str, Any] = {
+    "schemaVersion": 1,
+    "operation": "surface-audit",
+    "mode": "read",
+    "status": "ok",
+    "diagnostics": [
+        {
+            "code": "HS-EFFECTIVE-HARNESS-UNCERTAIN",
+            "severity": "warning",
+            "subject": {"kind": "surface", "locator": ".claude/settings.json"},
+            "message": "the managed policy could not be read",
+            "cause": "managed-policy-uninspectable",
+            "affected": [".claude/settings.json#/hooks/PreToolUse/0"],
+            "remediation": "Supply the missing evidence, or accept the uncertainty",
+        }
+    ],
+    "changes": [],
+    "data": {
+        "artifacts": [
+            {
+                "locator": "CLAUDE.md",
+                "type": "entry-point",
+                "scope": "repository",
+                "provenance": "authored",
+                "managementAuthority": "local",
+                "activation": "active",
+                "activationCause": None,
+                "harnessRelevant": True,
+                "sets": ["inventoried", "governed", "managed", "governed-harness"],
+            }
+        ],
+        "containers": [
+            {
+                "locator": ".claude/settings.json",
+                "format": "json",
+                "holds": [".claude/settings.json#/hooks/PreToolUse/0"],
+            }
+        ],
+        "observations": [
+            {
+                "locator": ".mcp.json",
+                "component": "mcp-server",
+                "capabilities": {
+                    "inventory": "managed",
+                    "structuralCheck": "observed-only",
+                    "lifecycleAdvice": "observed-only",
+                    "mutation": "unsupported",
+                },
+            }
+        ],
+    },
+}
+
+
+def test_a_populated_surface_audit_document_is_schema_valid() -> None:
+    validate_document(POPULATED_SURFACE_AUDIT)
+
+
+def mutated(**changes: Any) -> dict[str, Any]:
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document.update(changes)
+    return document
+
+
+def test_the_schema_rejects_an_unrecognised_top_level_key() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(mutated(elapsedSeconds=0.4))
+
+
+def test_the_schema_rejects_an_unrecognised_key_inside_an_artifact() -> None:
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document["data"]["artifacts"][0]["owner"] = "someone"
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(document)
+
+
+def test_the_schema_rejects_a_change_on_a_read_operation() -> None:
+    change = {
+        "path": "CLAUDE.md",
+        "action": "update",
+        "digestBefore": "before",
+        "digestAfter": "after",
+        "applied": False,
+        "patch": {"format": "unified", "content": "--- a\n+++ b\n"},
+    }
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(mutated(changes=[change]))
+
+
+def test_the_schema_rejects_data_on_a_run_that_identified_no_operation() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(mutated(operation=None, status="usage-error"))
+
+
+def test_the_schema_rejects_a_created_file_that_claims_a_previous_digest() -> None:
+    change = {
+        "path": "CLAUDE.md",
+        "action": "create",
+        "digestBefore": "before",
+        "digestAfter": "after",
+        "applied": True,
+        "patch": {"format": "unified", "content": "--- a\n+++ b\n"},
+    }
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(mutated(mode="apply", changes=[change]))
+
+
+def test_the_schema_rejects_an_artifact_type_outside_the_taxonomy() -> None:
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document["data"]["artifacts"][0]["type"] = "workflow"
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(document)

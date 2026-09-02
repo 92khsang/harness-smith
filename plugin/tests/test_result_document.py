@@ -4,23 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from harness_smith.diagnostics import (
-    DIAGNOSTIC_REGISTRY,
-    Diagnostic,
-    Severity,
-    Subject,
-    SubjectKind,
-)
+from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY, Diagnostic
 from harness_smith.result import (
     Change,
     ChangeAction,
-    Mode,
     OperationResult,
     Patch,
     PatchFormat,
-    Status,
     resolve_status,
 )
+from harness_smith.vocabulary import Mode, Severity, Status, Subject, SubjectKind
 from tests.support import validate_document
 
 
