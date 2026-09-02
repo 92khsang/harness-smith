@@ -89,6 +89,13 @@ environments=$data_dir/venvs
 # reads those from the plugin root directly and they never enter the environment.
 FINGERPRINTED_PATHS=(pyproject.toml uv.lock src resources)
 
+# uv caches the wheel it builds for a local project under that project's name and version, and
+# a plugin's version does not move for every source change. The fingerprint above already
+# selects a new environment when the source changes; without refreshing this one package, uv
+# fills that correctly-new environment with the wheel it built from the previous source. Only
+# this project is refreshed, so every dependency stays cached and preparation stays cheap.
+PROJECT_PACKAGE=harness-smith
+
 if command -v sha256sum >/dev/null 2>&1; then
   sha256_command=(sha256sum)
 elif command -v shasum >/dev/null 2>&1; then
@@ -175,6 +182,7 @@ prepare_environment() {
     fail_environment 'the stale readiness marker could not be removed' "$marker"
 
   UV_PROJECT_ENVIRONMENT=$venv uv sync --locked --no-dev --no-editable \
+    --refresh-package "$PROJECT_PACKAGE" \
     ${reinstall[@]+"${reinstall[@]}"} --project "$plugin_root" >&2 ||
     fail_environment 'environment preparation failed: uv sync --locked --no-dev --no-editable'
 

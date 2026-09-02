@@ -15,6 +15,7 @@ from harness_smith.artifacts import (
     ArtifactType,
     CapabilityValue,
     ContainerFormat,
+    GovernanceSet,
     ManagementAuthority,
     Provenance,
     Representation,
@@ -80,6 +81,7 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
             [member.value for member in ActivationCause],
         ),
         ("$defs/managementAuthority/enum", [member.value for member in ManagementAuthority]),
+        ("$defs/governanceSet/enum", [member.value for member in GovernanceSet]),
     ],
 )
 def test_schema_enums_match_the_implementation(pointer: str, expected: list[str]) -> None:
@@ -284,6 +286,28 @@ def test_authority_does_not_apply_outside_repository_and_plugin_scope(scope: str
 
     with pytest.raises(jsonschema.ValidationError):
         validate_document(with_artifact(scope=scope, managementAuthority="local"))
+
+
+def test_the_governance_sets_are_a_closed_vocabulary() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(with_artifact(sets=["inventoried", "govrened"]))
+
+
+def test_a_governance_set_is_named_at_most_once() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(with_artifact(sets=["inventoried", "inventoried"]))
+
+
+def test_every_inventoried_artifact_says_it_is_inventoried() -> None:
+    """An entry of the Artifact Inventory is an Inventoried Artifact by definition, so the set
+    is not one a report may leave off."""
+    validate_document(with_artifact(sets=["inventoried"]))
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(with_artifact(sets=[]))
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(with_artifact(sets=["governed"]))
 
 
 def test_the_schema_rejects_an_authority_outside_the_four_values() -> None:

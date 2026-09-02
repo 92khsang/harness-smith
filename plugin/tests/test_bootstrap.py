@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,7 +12,7 @@ import pytest
 
 from harness_smith.cli import preferred_format
 from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
-from tests.support import BOOTSTRAP_PATH, LOADER_PATH, PLUGIN_ROOT, validate_document
+from tests.support import BOOTSTRAP_PATH, LOADER_PATH, validate_document
 
 # A stub ``uv`` that builds the environment the launcher asked for and records the plugin root
 # it was pointed at, so a test can tell which version's code an environment holds.
@@ -173,6 +171,19 @@ def test_the_environment_holds_its_own_copy_of_the_source(plugin_data: PluginDat
 
     assert "--no-editable" in plugin_data.uv_invocations[0]
     assert "--locked" in plugin_data.uv_invocations[0]
+
+
+def test_the_project_wheel_is_rebuilt_rather_than_taken_from_the_cache(
+    plugin_data: PluginData,
+) -> None:
+    """uv keys its build cache for a local project by name and version, neither of which moves
+    when only the source does. Refreshing this one package leaves every dependency cached."""
+    launcher = plugin_data.install("A")
+
+    plugin_data.run(launcher, "surface-audit")
+
+    assert "--refresh-package harness-smith" in plugin_data.uv_invocations[0]
+    assert "--no-cache" not in plugin_data.uv_invocations[0]
 
 
 def test_an_update_that_changes_only_source_runs_the_new_code(plugin_data: PluginData) -> None:
@@ -517,39 +528,3 @@ def test_a_damaged_environment_never_ends_in_a_bare_import_error(tmp_path: Path)
     assert run.returncode != 1
     assert run.stdout.strip() != ""
     assert "ModuleNotFoundError" not in run.stdout
-
-
-@pytest.mark.skipif(shutil.which("uv") is None, reason="needs the real uv to check the lock")
-def test_a_lock_that_no_longer_describes_the_project_is_refused(tmp_path: Path) -> None:
-    """--frozen installed the stale lock and marked the environment ready while a declared
-    dependency was missing from it."""
-    root = tmp_path / "plugin"
-    shutil.copytree(
-        PLUGIN_ROOT, root, ignore=shutil.ignore_patterns(".venv", "__pycache__", ".*_cache")
-    )
-    pyproject = root / "pyproject.toml"
-    pyproject.write_text(
-        re.sub(
-            r"^dependencies = .*$",
-            'dependencies = ["tomli-w>=1.0"]',
-            pyproject.read_text(encoding="utf-8"),
-            count=1,
-            flags=re.MULTILINE,
-        ),
-        encoding="utf-8",
-    )
-    data_dir = tmp_path / "plugin-data"
-
-    run = subprocess.run(
-        [str(root / "bin" / "harness-smith"), "surface-audit", "--format", "json"],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "HARNESS_SMITH_DATA_DIR": str(data_dir)},
-    )
-
-    assert run.returncode == 3
-    document = json.loads(run.stdout)
-    validate_document(document)
-    assert [entry["code"] for entry in document["diagnostics"]] == ["HS-BOOTSTRAP-FAILED"]
-    assert list((data_dir / "venvs").glob("*.ready")) == []

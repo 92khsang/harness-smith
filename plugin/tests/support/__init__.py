@@ -47,6 +47,10 @@ def run_cli(*arguments: str, cwd: Path, environment: Mapping[str, str] | None = 
     The interpreter flags and the loader mirror the launcher exactly. ``-I`` is the point: the
     working directory is the repository under audit, and neither it nor any ``PYTHON*``
     variable may reach ``sys.path``.
+
+    This is not the launcher. It runs the loader under the development environment, where the
+    project is installed editable, so it can never observe how ``bin/harness-smith`` builds or
+    installs one. ``tests/test_launcher_acceptance.py`` owns that, with the real uv.
     """
     completed = subprocess.run(
         [sys.executable, "-I", "-X", "utf8", str(LOADER_PATH), *arguments],

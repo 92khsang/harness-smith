@@ -493,6 +493,17 @@
         "unknown"
       ]
     },
+    "governanceSet": {
+      "enum": [
+        "inventoried",
+        "governed",
+        "managed",
+        "advisory",
+        "unclassified",
+        "observed",
+        "governed-harness"
+      ]
+    },
     "capabilityValue": {
       "enum": [
         "managed",
@@ -623,8 +634,12 @@
         },
         "sets": {
           "type": "array",
+          "uniqueItems": true,
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/governanceSet"
+          },
+          "contains": {
+            "const": "inventoried"
           }
         }
       },
