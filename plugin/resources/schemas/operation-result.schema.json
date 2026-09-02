@@ -5,9 +5,19 @@
   "description": "The one envelope every harness-smith operation emits.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "operation", "mode", "status", "diagnostics", "changes", "data"],
+  "required": [
+    "schemaVersion",
+    "operation",
+    "mode",
+    "status",
+    "diagnostics",
+    "changes",
+    "data"
+  ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "const": 1
+    },
     "operation": {
       "oneOf": [
         {
@@ -26,105 +36,365 @@
             "rules-distill"
           ]
         },
-        { "type": "null" }
+        {
+          "type": "null"
+        }
       ]
     },
-    "mode": { "enum": ["read", "plan", "apply"] },
-    "status": { "enum": ["ok", "violations", "usage-error", "environment-error"] },
-    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
-    "changes": { "type": "array", "items": { "$ref": "#/$defs/change" } },
-    "data": { "type": ["object", "null"] }
+    "mode": {
+      "enum": [
+        "read",
+        "plan",
+        "apply"
+      ]
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "violations",
+        "usage-error",
+        "environment-error"
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "data": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
   },
   "allOf": [
     {
-      "if": { "properties": { "operation": { "const": null } }, "required": ["operation"] },
-      "then": { "properties": { "data": { "type": "null" } } }
-    },
-    {
-      "if": { "properties": { "mode": { "const": "read" } }, "required": ["mode"] },
-      "then": { "properties": { "changes": { "maxItems": 0 } } }
+      "if": {
+        "properties": {
+          "operation": {
+            "const": null
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "null"
+          },
+          "mode": {
+            "const": "read"
+          }
+        }
+      }
     },
     {
       "if": {
         "properties": {
-          "operation": { "const": "surface-audit" },
-          "status": { "enum": ["ok", "violations"] }
+          "mode": {
+            "const": "read"
+          }
         },
-        "required": ["operation", "status"]
+        "required": [
+          "mode"
+        ]
       },
-      "then": { "properties": { "data": { "$ref": "#/$defs/surfaceAuditData" } } }
+      "then": {
+        "properties": {
+          "changes": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "surface-audit"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "violations"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/surfaceAuditData"
+          }
+        }
+      }
     }
   ],
   "$defs": {
-    "diagnosticCode": { "type": "string", "pattern": "^HS-[A-Z0-9]+(-[A-Z0-9]+)*$" },
-    "locator": { "type": "string", "minLength": 1 },
+    "diagnosticCode": {
+      "type": "string",
+      "pattern": "^HS-[A-Z0-9]+(-[A-Z0-9]+)*$"
+    },
+    "locator": {
+      "type": "string",
+      "minLength": 1
+    },
     "diagnostic": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "severity", "subject", "message"],
+      "required": [
+        "code",
+        "severity",
+        "subject",
+        "message"
+      ],
       "properties": {
-        "code": { "$ref": "#/$defs/diagnosticCode" },
-        "severity": { "enum": ["error", "warning", "info"] },
-        "subject": { "$ref": "#/$defs/subject" },
-        "message": { "type": "string" },
-        "cause": { "type": "string" },
-        "affected": { "type": "array", "items": { "$ref": "#/$defs/locator" } },
-        "remediation": { "type": "string" }
+        "code": {
+          "$ref": "#/$defs/diagnosticCode"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/subject"
+        },
+        "message": {
+          "type": "string"
+        },
+        "cause": {
+          "type": "string"
+        },
+        "affected": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/locator"
+          }
+        },
+        "remediation": {
+          "type": "string"
+        }
       }
     },
     "subject": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "locator"],
+      "required": [
+        "kind",
+        "locator"
+      ],
       "properties": {
-        "kind": { "enum": ["artifact", "container", "surface", "relation", "environment"] },
-        "locator": { "oneOf": [{ "$ref": "#/$defs/locator" }, { "type": "null" }] }
+        "kind": {
+          "enum": [
+            "artifact",
+            "container",
+            "surface",
+            "relation",
+            "environment"
+          ]
+        },
+        "locator": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/locator"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       }
     },
     "change": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "action", "digestBefore", "digestAfter", "applied", "patch"],
+      "required": [
+        "path",
+        "action",
+        "digestBefore",
+        "digestAfter",
+        "applied",
+        "patch"
+      ],
       "properties": {
-        "path": { "$ref": "#/$defs/locator" },
-        "action": { "enum": ["create", "update", "delete"] },
-        "digestBefore": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
-        "digestAfter": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
-        "applied": { "type": "boolean" },
-        "patch": { "$ref": "#/$defs/patch" }
+        "path": {
+          "$ref": "#/$defs/locator"
+        },
+        "action": {
+          "enum": [
+            "create",
+            "update",
+            "delete"
+          ]
+        },
+        "digestBefore": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "digestAfter": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "patch": {
+          "$ref": "#/$defs/patch"
+        }
       },
       "allOf": [
         {
-          "if": { "properties": { "action": { "const": "create" } }, "required": ["action"] },
-          "then": { "properties": { "digestBefore": { "type": "null" } } }
+          "if": {
+            "properties": {
+              "action": {
+                "const": "create"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "digestBefore": {
+                "type": "null"
+              },
+              "digestAfter": {
+                "type": "string"
+              }
+            }
+          }
         },
         {
-          "if": { "properties": { "action": { "const": "delete" } }, "required": ["action"] },
-          "then": { "properties": { "digestAfter": { "type": "null" } } }
+          "if": {
+            "properties": {
+              "action": {
+                "const": "update"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "digestBefore": {
+                "type": "string"
+              },
+              "digestAfter": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "delete"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "digestBefore": {
+                "type": "string"
+              },
+              "digestAfter": {
+                "type": "null"
+              }
+            }
+          }
         }
       ]
     },
     "patch": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["format", "content"],
+      "required": [
+        "format",
+        "content"
+      ],
       "properties": {
-        "format": { "enum": ["unified", "json-pointer-ops"] },
+        "format": {
+          "enum": [
+            "unified",
+            "json-pointer-ops"
+          ]
+        },
         "content": {}
       },
       "allOf": [
         {
-          "if": { "properties": { "format": { "const": "unified" } }, "required": ["format"] },
-          "then": { "properties": { "content": { "type": "string" } } }
-        },
-        {
           "if": {
-            "properties": { "format": { "const": "json-pointer-ops" } },
-            "required": ["format"]
+            "properties": {
+              "format": {
+                "const": "unified"
+              }
+            },
+            "required": [
+              "format"
+            ]
           },
           "then": {
             "properties": {
-              "content": { "type": "array", "items": { "$ref": "#/$defs/pointerOperation" } }
+              "content": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "json-pointer-ops"
+              }
+            },
+            "required": [
+              "format"
+            ]
+          },
+          "then": {
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/pointerOperation"
+                }
+              }
             }
           }
         }
@@ -133,25 +403,56 @@
     "pointerOperation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["op", "pointer", "before", "after"],
+      "required": [
+        "op",
+        "pointer",
+        "before",
+        "after"
+      ],
       "properties": {
-        "op": { "type": "string" },
-        "pointer": { "type": "string" },
+        "op": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": "string"
+        },
         "before": {},
         "after": {}
       }
     },
-    "capabilityValue": { "enum": ["managed", "observed-only", "unsupported"] },
+    "capabilityValue": {
+      "enum": [
+        "managed",
+        "observed-only",
+        "unsupported"
+      ]
+    },
     "surfaceAuditData": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["artifacts", "containers", "observations"],
+      "required": [
+        "artifacts",
+        "containers",
+        "observations"
+      ],
       "properties": {
-        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/inventoriedArtifact" } },
-        "containers": { "type": "array", "items": { "$ref": "#/$defs/artifactContainer" } },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inventoriedArtifact"
+          }
+        },
+        "containers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactContainer"
+          }
+        },
         "observations": {
           "type": "array",
-          "items": { "$ref": "#/$defs/runtimeComponentObservation" }
+          "items": {
+            "$ref": "#/$defs/runtimeComponentObservation"
+          }
         }
       }
     },
@@ -170,7 +471,9 @@
         "sets"
       ],
       "properties": {
-        "locator": { "$ref": "#/$defs/locator" },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        },
         "type": {
           "enum": [
             "entry-point",
@@ -183,12 +486,38 @@
             "decision-record"
           ]
         },
-        "scope": { "enum": ["repository", "plugin", "user-global", "external"] },
-        "provenance": { "enum": ["authored", "generated", "imported", "adopted"] },
-        "managementAuthority": {
-          "enum": ["local", "harness-smith", "external-plugin", "unknown", "not-applicable"]
+        "scope": {
+          "enum": [
+            "repository",
+            "plugin",
+            "user-global",
+            "external"
+          ]
         },
-        "activation": { "enum": ["active", "inactive", "unknown"] },
+        "provenance": {
+          "enum": [
+            "authored",
+            "generated",
+            "imported",
+            "adopted"
+          ]
+        },
+        "managementAuthority": {
+          "enum": [
+            "local",
+            "harness-smith",
+            "external-plugin",
+            "unknown",
+            "not-applicable"
+          ]
+        },
+        "activation": {
+          "enum": [
+            "active",
+            "inactive",
+            "unknown"
+          ]
+        },
         "activationCause": {
           "oneOf": [
             {
@@ -202,39 +531,85 @@
                 "disable-all-hooks"
               ]
             },
-            { "type": "null" }
+            {
+              "type": "null"
+            }
           ]
         },
-        "harnessRelevant": { "type": "boolean" },
-        "sets": { "type": "array", "items": { "type": "string" } }
+        "harnessRelevant": {
+          "type": "boolean"
+        },
+        "sets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "artifactContainer": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["locator", "format", "holds"],
+      "required": [
+        "locator",
+        "format",
+        "holds"
+      ],
       "properties": {
-        "locator": { "$ref": "#/$defs/locator" },
-        "format": { "enum": ["json", "yaml-frontmatter"] },
-        "holds": { "type": "array", "items": { "$ref": "#/$defs/locator" } }
+        "locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "format": {
+          "enum": [
+            "json",
+            "yaml-frontmatter"
+          ]
+        },
+        "holds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/locator"
+          }
+        }
       }
     },
     "runtimeComponentObservation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["locator", "component", "capabilities"],
+      "required": [
+        "locator",
+        "component",
+        "capabilities"
+      ],
       "properties": {
-        "locator": { "$ref": "#/$defs/locator" },
-        "component": { "type": "string" },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        },
+        "component": {
+          "type": "string"
+        },
         "capabilities": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["inventory", "structuralCheck", "lifecycleAdvice", "mutation"],
+          "required": [
+            "inventory",
+            "structuralCheck",
+            "lifecycleAdvice",
+            "mutation"
+          ],
           "properties": {
-            "inventory": { "$ref": "#/$defs/capabilityValue" },
-            "structuralCheck": { "$ref": "#/$defs/capabilityValue" },
-            "lifecycleAdvice": { "$ref": "#/$defs/capabilityValue" },
-            "mutation": { "$ref": "#/$defs/capabilityValue" }
+            "inventory": {
+              "$ref": "#/$defs/capabilityValue"
+            },
+            "structuralCheck": {
+              "$ref": "#/$defs/capabilityValue"
+            },
+            "lifecycleAdvice": {
+              "$ref": "#/$defs/capabilityValue"
+            },
+            "mutation": {
+              "$ref": "#/$defs/capabilityValue"
+            }
           }
         }
       }

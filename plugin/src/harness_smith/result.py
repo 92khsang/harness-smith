@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from harness_smith.diagnostics import Diagnostic
-from harness_smith.envelope import (
+from harness_smith.vocabulary import (
     EXIT_CODE_BY_STATUS,
     OUTCOME_PRIORITY,
     SCHEMA_VERSION,
@@ -19,14 +19,11 @@ from harness_smith.envelope import (
 )
 
 __all__ = [
-    "EXIT_CODE_BY_STATUS",
     "Change",
     "ChangeAction",
-    "Mode",
     "OperationResult",
     "Patch",
     "PatchFormat",
-    "Status",
     "resolve_status",
 ]
 
@@ -61,8 +58,8 @@ class Change:
     path: str
     action: ChangeAction
     patch: Patch
-    digest_before: str | None = None
-    digest_after: str | None = None
+    digest_before: str | None
+    digest_after: str | None
     applied: bool = False
 
     def as_document(self) -> dict[str, object]:

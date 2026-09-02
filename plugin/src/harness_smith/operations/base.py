@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Literal
 
 from harness_smith.diagnostics import Diagnostic
-from harness_smith.envelope import Mode
 from harness_smith.result import Change
+from harness_smith.vocabulary import Mode
 
 OperationKind = Literal["read", "write"]
 
@@ -20,10 +20,6 @@ class OperationSpec:
     name: str
     kind: OperationKind
     summary: str
-
-    @property
-    def write_capable(self) -> bool:
-        return self.kind == "write"
 
     @property
     def default_mode(self) -> Mode:
@@ -51,5 +47,5 @@ class Operation(ABC):
         """Produce this operation's data, diagnostics, and proposed changes."""
 
     @abstractmethod
-    def render_text(self, outcome: OperationOutcome) -> str:
+    def render_text(self, data: Mapping[str, object]) -> str:
         """The human-readable body for the default output format."""

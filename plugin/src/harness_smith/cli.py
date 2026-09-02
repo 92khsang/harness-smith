@@ -13,12 +13,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NoReturn
 
-from harness_smith.diagnostics import ENVIRONMENT_SUBJECT, Diagnostic
-from harness_smith.envelope import ExitCode, Mode
-from harness_smith.operations import REGISTRY, Operation, OperationOutcome, OperationRequest
+from harness_smith.diagnostics import Diagnostic
+from harness_smith.operations import REGISTRY, Operation, OperationRequest
 from harness_smith.render import FORMATS, JSON, TEXT, render_json, render_text
 from harness_smith.repository import resolve_repository_root
 from harness_smith.result import OperationResult
+from harness_smith.vocabulary import ENVIRONMENT_SUBJECT, ExitCode, Mode
 
 PROGRAM = "harness-smith"
 
@@ -80,7 +80,11 @@ def build_parser() -> _Parser:
 
 
 def preferred_format(arguments: Sequence[str]) -> str:
-    """Pre-scan the arguments so a run that fails before parsing still honours ``--format``."""
+    """Pre-scan the arguments so a run that fails before parsing still honours ``--format``.
+
+    The last occurrence wins, which is what the parser itself would have decided.
+    """
+    chosen = TEXT
     for index, argument in enumerate(arguments):
         if argument == "--format" and index + 1 < len(arguments):
             candidate = arguments[index + 1]
@@ -89,8 +93,12 @@ def preferred_format(arguments: Sequence[str]) -> str:
         else:
             continue
         if candidate in FORMATS:
-            return candidate
-    return TEXT
+            chosen = candidate
+    return chosen
+
+
+def help_requested(arguments: Sequence[str]) -> bool:
+    return any(argument in {"-h", "--help"} for argument in arguments)
 
 
 def _failure(operation: str | None, mode: Mode, code: str, message: str) -> OperationResult:
@@ -102,22 +110,30 @@ def _failure(operation: str | None, mode: Mode, code: str, message: str) -> Oper
     )
 
 
-def _emit(
-    result: OperationResult,
-    output_format: str,
-    operation: Operation | None = None,
-    outcome: OperationOutcome | None = None,
-) -> int:
+def _emit(result: OperationResult, output_format: str, operation: Operation | None = None) -> int:
     if output_format == JSON:
         sys.stdout.write(render_json(result))
     else:
-        sys.stdout.write(render_text(result, operation, outcome))
+        sys.stdout.write(render_text(result, operation))
     return int(result.exit_code)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     output_format = preferred_format(arguments)
+
+    # Help is prose on stdout, which is the one thing --format json promises stdout will not
+    # carry. The contract forbids the combination rather than breaking the promise.
+    if output_format == JSON and help_requested(arguments):
+        return _emit(
+            _failure(
+                None,
+                Mode.READ,
+                "HS-CLI-USAGE",
+                "--help is not available with --format json; ask for help in the text format",
+            ),
+            JSON,
+        )
 
     try:
         parsed = build_parser().parse_args(arguments)
@@ -137,7 +153,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 operation.spec.name,
                 mode,
                 "HS-REPOSITORY-ROOT-NOT-FOUND",
-                "no repository root could be identified from the working directory",
+                "the given --root is not a repository"
+                if parsed.root is not None
+                else "no repository root could be identified from the working directory",
             ),
             output_format,
         )
@@ -160,4 +178,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         changes=outcome.changes,
         data=outcome.data,
     )
-    return _emit(result, output_format, operation, outcome)
+    return _emit(result, output_format, operation)

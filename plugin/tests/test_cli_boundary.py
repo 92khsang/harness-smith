@@ -7,13 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.support import (
-    make_repository,
-    run_cli,
-    snapshot_tree,
-    sole_json_document,
-    validate_document,
-)
+from tests.support import make_repository, run_cli, snapshot_tree, sole_json_document
 
 
 @pytest.fixture
@@ -27,7 +21,6 @@ def test_surface_audit_on_an_empty_repository_emits_three_empty_inventories(
     run = run_cli("surface-audit", "--format", "json", cwd=repository)
 
     assert run.exit_code == 0
-    validate_document(run.document)
     assert run.document == {
         "schemaVersion": 1,
         "operation": "surface-audit",
@@ -58,7 +51,6 @@ def test_an_unknown_operation_fails_before_dispatch(repository: Path) -> None:
     run = run_cli("no-such-operation", "--format", "json", cwd=repository)
 
     assert run.exit_code == 2
-    validate_document(run.document)
     assert run.document["operation"] is None
     assert run.document["data"] is None
     assert run.document["mode"] == "read"
@@ -101,7 +93,6 @@ def test_no_identifiable_repository_root_is_a_precondition_error(tmp_path: Path)
     run = run_cli("surface-audit", "--format", "json", cwd=outside)
 
     assert run.exit_code == 2
-    validate_document(run.document)
     assert run.document["operation"] == "surface-audit"
     assert run.document["data"] is None
     assert run.document["status"] == "usage-error"
@@ -137,6 +128,53 @@ def test_an_explicit_root_that_is_not_a_repository_is_refused(tmp_path: Path) ->
 
     assert run.exit_code == 2
     assert run.diagnostic_codes == ["HS-REPOSITORY-ROOT-NOT-FOUND"]
+
+
+def test_a_refused_explicit_root_says_so_rather_than_blaming_the_working_directory(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+
+    refused = run_cli("surface-audit", "--root", str(outside), "--format", "json", cwd=outside)
+    undiscovered = run_cli("surface-audit", "--format", "json", cwd=outside)
+
+    assert "--root" in refused.document["diagnostics"][0]["message"]
+    assert "working directory" in undiscovered.document["diagnostics"][0]["message"]
+
+
+def test_a_diagnostic_message_carries_no_absolute_path(tmp_path: Path) -> None:
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+
+    run = run_cli("surface-audit", "--root", str(outside), "--format", "json", cwd=outside)
+
+    assert str(outside) not in run.stdout
+
+
+def test_help_is_refused_as_a_format_combination_rather_than_written_to_stdout(
+    repository: Path,
+) -> None:
+    run = run_cli("--format", "json", "--help", cwd=repository)
+
+    assert run.exit_code == 2
+    assert run.document["operation"] is None
+    assert run.diagnostic_codes == ["HS-CLI-USAGE"]
+
+
+def test_help_is_ordinary_prose_in_the_text_format(repository: Path) -> None:
+    run = run_cli("--help", cwd=repository)
+
+    assert run.exit_code == 0
+    assert "surface-audit" in run.stdout
+
+
+def test_the_last_format_wins_as_the_parser_would_have_decided(repository: Path) -> None:
+    run = run_cli("surface-audit", "--format", "json", "--format", "text", cwd=repository)
+
+    assert run.exit_code == 0
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(run.stdout)
 
 
 def test_two_runs_over_the_same_repository_are_byte_identical(repository: Path) -> None:

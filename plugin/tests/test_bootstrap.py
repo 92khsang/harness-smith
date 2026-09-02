@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
 from tests.support import BOOTSTRAP_PATH, validate_document
 
 STUB_UV = """#!/usr/bin/env bash
@@ -116,6 +117,18 @@ def test_a_missing_uv_is_an_environment_failure_reported_as_a_document(tmp_path:
     assert document["data"] is None
     assert [entry["code"] for entry in document["diagnostics"]] == ["HS-BOOTSTRAP-FAILED"]
     assert "uv" in run.stderr
+
+
+def test_the_bootstrap_document_repeats_the_registry_remediation_verbatim(tmp_path: Path) -> None:
+    """The wrapper writes its document before Python exists, so the one string it duplicates
+    from the registry is held to it here."""
+    bootstrap = Bootstrap(tmp_path, with_uv=False)
+
+    run = bootstrap.run("surface-audit", "--format", "json")
+
+    diagnostic = json.loads(run.stdout)["diagnostics"][0]
+    assert diagnostic["remediation"] == DIAGNOSTIC_REGISTRY["HS-BOOTSTRAP-FAILED"].remediation
+    assert diagnostic["severity"] == DIAGNOSTIC_REGISTRY["HS-BOOTSTRAP-FAILED"].severity
 
 
 @pytest.mark.parametrize("arguments", [("surface-audit",), ("surface-audit", "--format", "text")])

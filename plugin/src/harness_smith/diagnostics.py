@@ -10,23 +10,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from harness_smith.envelope import (
-    ENVIRONMENT_SUBJECT,
-    ExitCode,
-    Severity,
-    Subject,
-    SubjectKind,
-)
+from harness_smith.vocabulary import ExitCode, Severity, Subject
 
-__all__ = [
-    "DIAGNOSTIC_REGISTRY",
-    "ENVIRONMENT_SUBJECT",
-    "Diagnostic",
-    "DiagnosticSpec",
-    "Severity",
-    "Subject",
-    "SubjectKind",
-]
+__all__ = ["DIAGNOSTIC_REGISTRY", "Diagnostic", "DiagnosticSpec"]
 
 
 @dataclass(frozen=True)

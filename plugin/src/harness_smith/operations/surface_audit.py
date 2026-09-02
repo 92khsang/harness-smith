@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from harness_smith.operations.base import (
     Operation,
     OperationOutcome,
@@ -9,7 +11,8 @@ from harness_smith.operations.base import (
     OperationSpec,
 )
 
-EMPTY_REPORT: dict[str, object] = {"artifacts": [], "containers": [], "observations": []}
+# The three parts of a Discovery Report, in the order they are reported.
+SECTIONS: tuple[str, ...] = ("artifacts", "containers", "observations")
 
 
 class SurfaceAudit(Operation):
@@ -21,13 +24,12 @@ class SurfaceAudit(Operation):
     )
 
     def run(self, request: OperationRequest) -> OperationOutcome:
-        return OperationOutcome(data=dict(EMPTY_REPORT))
+        return OperationOutcome(data={section: [] for section in SECTIONS})
 
-    def render_text(self, outcome: OperationOutcome) -> str:
-        counts = {section: len(_entries(outcome, section)) for section in EMPTY_REPORT}
-        return "\n".join(f"  {section}: {count}" for section, count in counts.items())
+    def render_text(self, data: Mapping[str, object]) -> str:
+        return "\n".join(f"  {section}: {len(_entries(data, section))}" for section in SECTIONS)
 
 
-def _entries(outcome: OperationOutcome, section: str) -> list[object]:
-    value = outcome.data.get(section, [])
+def _entries(data: Mapping[str, object], section: str) -> list[object]:
+    value = data.get(section, [])
     return list(value) if isinstance(value, list) else []
