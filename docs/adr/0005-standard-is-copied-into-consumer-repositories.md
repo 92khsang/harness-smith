@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-02
 ---
 
@@ -13,8 +13,18 @@ An agent working in the repository must be able to read the standard whether or 
 
 ## Consequences
 
-- The copy is described by three independent axes, not one compound state. Provenance starts as `generated`; update policy starts as `pinned`; Management Authority starts as `harness-smith`. Each axis is recorded where its kind of metadata belongs: `harness.lock.json` holds provenance, source id, source version, content digest, and the drift baseline, because those are computed; `harness.manifest.yaml` holds the authority declaration, because that is a human policy statement.
-- A local edit makes the digest disagree with the recorded baseline, which is unacknowledged drift. Reviewing and approving it moves Provenance to `adopted`, update policy to `local`, and Management Authority to `local`, keeping the standard version and digest it was based on. Pinning therefore does not forbid a local override; it separates accidental drift from deliberate change.
+- The copy is described by three independent axes, not one compound state. Provenance starts as `generated`, update policy as `pinned`, Management Authority as `harness-smith`. Each axis is stored where its kind of metadata belongs, and the split is by who decides the value rather than by which artifact it describes:
+
+  | File | Holds | Why |
+  | :--- | :--- | :--- |
+  | `harness.manifest.yaml` | `managementAuthority`, `updatePolicy`, declared Consumer and Writer relations | Human policy choices |
+  | `harness.lock.json` | provenance, source id, source version, content digest, drift baseline | Computed, tool-owned |
+  | Rule frontmatter | `enforced-by`, `verified-by`, and other rule-local relations | Belongs with its subject |
+
+  `pinned` versus `local` is a choice someone makes, not a result anything computes, so it sits with the authority declaration in the manifest rather than in the lock.
+
+- A local edit makes the digest disagree with the recorded baseline, which is unacknowledged drift. Approving it is one composite transition across both files: the manifest's `updatePolicy` becomes `local` and its `managementAuthority` becomes `local`, while the lock's provenance becomes `adopted` and its approved digest and baseline are refreshed, keeping the standard version the edit was based on. Pinning therefore does not forbid a local override; it separates accidental drift from deliberate change.
+- That transition spans two files, so it is a concrete instance of the bounded write atomicity in ADR-0008: a crash partway through can leave the manifest updated and the lock not. The half-applied state is detectable rather than silent: a manifest in the post-adoption state with a lock still describing the pre-adoption state, or the inverse combination, raises `HS-AUTHORITY-LOCK-MANIFEST-MISMATCH`.
 - Upgrade behaviour follows the update policy: `pinned` is replaced after an explicit diff and approval, `local` is never overwritten automatically and becomes a manual merge.
 - The compatibility rules apply to `standardVersion`, the version of the normative contract, and not to the plugin's own release version. A major mismatch is an error, an older minor in the repository is an upgrade warning, and a repository minor ahead of the validator is a validator-too-old error. There is no automatic migration in v1.
 - The same shape covers any artifact `init` materialises, so the drift diagnostic `HS-ARTIFACT-UNACKNOWLEDGED-DRIFT` is shared rather than per-artifact-type.
