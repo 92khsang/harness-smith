@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# First-operation bootstrap.
+#
+# The plugin prepares its Python environment lazily, on the first explicit operation, rather
+# than from a SessionStart hook: a tool that audits other people's automation footprint should
+# not install a session-start side effect. The guard is a venv presence test plus a fingerprint
+# over pyproject.toml, uv.lock, and the environment's Python minor version, so every later run
+# is a no-op. The environment lives under the plugin data directory, which survives updates;
+# the plugin root does not.
+set -euo pipefail
+
+cli_arguments=("$@")
+
+plugin_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+data_dir=${HARNESS_SMITH_DATA_DIR:-${CLAUDE_PLUGIN_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/harness-smith}}
+venv=$data_dir/venv
+stamp=$data_dir/environment.fingerprint
+
+json_requested() {
+  local previous='' argument
+  for argument in ${cli_arguments[@]+"${cli_arguments[@]}"}; do
+    if [[ $argument == '--format=json' ]] ||
+      { [[ $previous == '--format' ]] && [[ $argument == 'json' ]]; }; then
+      return 0
+    fi
+    previous=$argument
+  done
+  return 1
+}
+
+# Bootstrap failure is an environment failure, exit 3. Automation asking for JSON gets a
+# well-formed document here too, so no invocation ever receives non-document output.
+fail_environment() {
+  local message=$1 escaped
+  printf 'harness-smith: %s\n' "$message" >&2
+  if json_requested; then
+    escaped=${message//\\/\\\\}
+    escaped=${escaped//\"/\\\"}
+    printf '{\n'
+    printf '  "schemaVersion": 1,\n'
+    printf '  "operation": null,\n'
+    printf '  "mode": "read",\n'
+    printf '  "status": "environment-error",\n'
+    printf '  "diagnostics": [\n'
+    printf '    {\n'
+    printf '      "code": "HS-BOOTSTRAP-FAILED",\n'
+    printf '      "severity": "error",\n'
+    printf '      "subject": { "kind": "environment", "locator": null },\n'
+    printf '      "message": "%s",\n' "$escaped"
+    printf '      "remediation": "Install `uv` and a supported Python, then re-run"\n'
+    printf '    }\n'
+    printf '  ],\n'
+    printf '  "changes": [],\n'
+    printf '  "data": null\n'
+    printf '}\n'
+  fi
+  exit 3
+}
+
+digest_of() {
+  local path=$1
+  if [[ ! -f $path ]]; then
+    printf 'absent'
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | cut -d' ' -f1
+  else
+    fail_environment 'no sha256 tool is available (sha256sum or shasum)'
+  fi
+}
+
+environment_fingerprint() {
+  local python_version
+  python_version=$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$venv/pyvenv.cfg" \
+    2>/dev/null | head -n 1)
+  printf '%s %s %s\n' \
+    "$(digest_of "$plugin_root/pyproject.toml")" \
+    "$(digest_of "$plugin_root/uv.lock")" \
+    "${python_version:-unknown}"
+}
+
+hand_over() {
+  exec "$venv/bin/python" -m harness_smith ${cli_arguments[@]+"${cli_arguments[@]}"}
+}
+
+if [[ -x $venv/bin/python && -f $stamp ]] &&
+  [[ $(cat "$stamp") == "$(environment_fingerprint)" ]]; then
+  hand_over
+fi
+
+command -v uv >/dev/null 2>&1 ||
+  fail_environment 'uv is not on PATH; it is required to prepare the harness-smith environment'
+
+mkdir -p "$data_dir"
+UV_PROJECT_ENVIRONMENT=$venv uv sync --frozen --no-dev --project "$plugin_root" >&2 ||
+  fail_environment 'environment preparation failed: uv sync --frozen --no-dev'
+
+environment_fingerprint >"$stamp"
+hand_over

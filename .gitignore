@@ -18,3 +18,11 @@ CLAUDE.local.md
 
 # OS cruft
 .DS_Store
+
+# Python build and tooling output
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
