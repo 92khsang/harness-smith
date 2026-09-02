@@ -88,7 +88,7 @@ def test_a_readable_block_yields_its_fields(body: str, expected: dict[str, objec
     assert frontmatter.fields == expected
 
 
-UNREADABLE: list[tuple[str, str]] = [
+INVALID: list[tuple[str, str]] = [
     ("an unclosed block", "---\nname: never-closed\n\n# Heading\n"),
     ("invalid YAML", document("paths: [1, 2\n")),
     ("a duplicate field", document("name: one\nname: two\n")),
@@ -100,11 +100,11 @@ UNREADABLE: list[tuple[str, str]] = [
 ]
 
 
-@pytest.mark.parametrize("text", [pytest.param(text, id=name) for name, text in UNREADABLE])
-def test_an_unreadable_block_says_why(text: str) -> None:
+@pytest.mark.parametrize("text", [pytest.param(text, id=name) for name, text in INVALID])
+def test_an_invalid_block_says_why(text: str) -> None:
     frontmatter = read_frontmatter(text)
 
-    assert frontmatter.state is FrontmatterState.UNREADABLE
+    assert frontmatter.state is FrontmatterState.INVALID
     assert frontmatter.reason
     assert frontmatter.fields == {}
 
@@ -145,7 +145,7 @@ def test_a_reason_locates_the_problem_by_its_line_in_the_file() -> None:
     """The block starts on the file's second line, so the reported line is the file's."""
     frontmatter = read_frontmatter(document("name: one\nname: two\n"))
 
-    assert frontmatter.state is FrontmatterState.UNREADABLE
+    assert frontmatter.state is FrontmatterState.INVALID
     assert "line 3" in frontmatter.reason
 
 
@@ -158,25 +158,32 @@ def test_reading_a_file_strips_a_byte_order_mark_the_encoding_left_behind(
     assert read_frontmatter_file(path).fields == {"name": "with-a-bom"}
 
 
-def test_a_file_that_is_not_utf_8_is_unreadable_without_naming_its_path(
-    tmp_path: Path,
-) -> None:
+def test_a_file_that_is_not_utf_8_never_became_text_to_parse(tmp_path: Path) -> None:
+    """A file-level failure is a different finding from invalid YAML, so it is a different
+    state: nothing here says anything about the YAML the bytes might have spelled out."""
     path = tmp_path / "rule.md"
     path.write_bytes(b"---\nname: \xff\xfe not utf-8\n---\n")
 
     frontmatter = read_frontmatter_file(path)
 
-    assert frontmatter.state is FrontmatterState.UNREADABLE
+    assert frontmatter.state is FrontmatterState.FILE_UNREADABLE
     assert str(path) not in frontmatter.reason
 
 
-def test_a_missing_file_is_unreadable_without_naming_its_path(tmp_path: Path) -> None:
+def test_a_missing_file_is_a_file_level_failure_without_naming_its_path(tmp_path: Path) -> None:
     path = tmp_path / "absent.md"
 
     frontmatter = read_frontmatter_file(path)
 
-    assert frontmatter.state is FrontmatterState.UNREADABLE
+    assert frontmatter.state is FrontmatterState.FILE_UNREADABLE
     assert str(path) not in frontmatter.reason
+
+
+def test_reading_a_file_still_reports_invalid_yaml_as_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "rule.md"
+    path.write_text(document("paths: [1, 2\n"), encoding="utf-8")
+
+    assert read_frontmatter_file(path).state is FrontmatterState.INVALID
 
 
 def test_a_parsed_block_reports_no_reason() -> None:

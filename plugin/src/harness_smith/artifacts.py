@@ -28,6 +28,7 @@ __all__ = [
     "ContainerFormat",
     "Discovery",
     "DiscoveryReport",
+    "GovernanceSet",
     "InventoriedArtifact",
     "ManagementAuthority",
     "Provenance",
@@ -103,6 +104,20 @@ class ActivationCause(StrEnum):
     DISABLE_ALL_HOOKS = "disable-all-hooks"
 
 
+class GovernanceSet(StrEnum):
+    """A derived query over one Discovery Report and one external-evidence snapshot, never a
+    label stored on an Artifact. Governed splits completely into Managed, Advisory and
+    Unclassified."""
+
+    INVENTORIED = "inventoried"
+    GOVERNED = "governed"
+    MANAGED = "managed"
+    ADVISORY = "advisory"
+    UNCLASSIFIED = "unclassified"
+    OBSERVED = "observed"
+    GOVERNED_HARNESS = "governed-harness"
+
+
 class ContainerFormat(StrEnum):
     JSON = "json"
     YAML_FRONTMATTER = "yaml-frontmatter"
@@ -137,9 +152,10 @@ class CapabilityPolicy:
 class InventoriedArtifact:
     """An Artifact a scan discovered, with the classification carried alongside it.
 
-    ``management_authority`` is null where no authority is asserted: outside repository and
-    plugin scope there is none, and inside them it is resolved by classification rather than by
-    discovery. ``sets`` holds the governance sets the artifact belongs to, which are derived
+    ``management_authority`` is null exactly where authority does not apply, which is outside
+    repository and plugin scope. Inside them it always takes one of the four values, and
+    ``unknown`` is what an unresolved one reads as, because refusing mutation is the safe
+    answer. ``sets`` holds the governance sets the artifact belongs to, which are derived
     queries over the report and the external-evidence snapshot rather than stored labels.
     """
 
@@ -152,7 +168,7 @@ class InventoriedArtifact:
     activation: Activation
     activation_cause: ActivationCause | None
     harness_relevant: bool
-    sets: tuple[str, ...]
+    sets: tuple[GovernanceSet, ...]
 
     def as_document(self) -> dict[str, object]:
         return {
@@ -169,7 +185,7 @@ class InventoriedArtifact:
                 None if self.activation_cause is None else self.activation_cause.value
             ),
             "harnessRelevant": self.harness_relevant,
-            "sets": list(self.sets),
+            "sets": [member.value for member in self.sets],
         }
 
 

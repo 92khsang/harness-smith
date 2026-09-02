@@ -15,6 +15,7 @@ from harness_smith.artifacts import (
     ArtifactType,
     CapabilityValue,
     ContainerFormat,
+    ManagementAuthority,
     Provenance,
     Representation,
     Scope,
@@ -78,6 +79,7 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
             "$defs/inventoriedArtifact/properties/activationCause/oneOf/0/enum",
             [member.value for member in ActivationCause],
         ),
+        ("$defs/managementAuthority/enum", [member.value for member in ManagementAuthority]),
     ],
 )
 def test_schema_enums_match_the_implementation(pointer: str, expected: list[str]) -> None:
@@ -249,26 +251,41 @@ def test_the_schema_rejects_an_artifact_type_outside_the_taxonomy() -> None:
         validate_document(document)
 
 
-def test_management_authority_keeps_its_four_values_and_is_null_where_it_does_not_apply() -> None:
-    """Authority applies only where mutation is conceivable. Outside repository and plugin
-    scope the answer is that there is no authority, which is null rather than a fifth value."""
-    assert enum_at("$defs/inventoriedArtifact/properties/managementAuthority/oneOf/0/enum") == [
+def with_artifact(**changes: Any) -> dict[str, Any]:
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document["data"]["artifacts"][0].update(changes)
+    return document
+
+
+def test_management_authority_keeps_its_four_values() -> None:
+    assert enum_at("$defs/managementAuthority/enum") == [
         "local",
         "harness-smith",
         "external-plugin",
         "unknown",
     ]
 
-    document = deepcopy(POPULATED_SURFACE_AUDIT)
-    document["data"]["artifacts"][0]["scope"] = "user-global"
-    document["data"]["artifacts"][0]["managementAuthority"] = None
 
-    validate_document(document)
+@pytest.mark.parametrize("scope", ["repository", "plugin"])
+def test_authority_applies_where_mutation_is_conceivable(scope: str) -> None:
+    """Inside repository and plugin scope authority always has one of the four values.
+    Unresolved is `unknown`, which refuses mutation; null would say the question does not
+    arise, and that is a different claim."""
+    validate_document(with_artifact(scope=scope, managementAuthority="unknown"))
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(with_artifact(scope=scope, managementAuthority=None))
+
+
+@pytest.mark.parametrize("scope", ["user-global", "external"])
+def test_authority_does_not_apply_outside_repository_and_plugin_scope(scope: str) -> None:
+    """Outside them there is no authority to hold, which is null rather than a fifth value."""
+    validate_document(with_artifact(scope=scope, managementAuthority=None))
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(with_artifact(scope=scope, managementAuthority="local"))
 
 
 def test_the_schema_rejects_an_authority_outside_the_four_values() -> None:
-    document = deepcopy(POPULATED_SURFACE_AUDIT)
-    document["data"]["artifacts"][0]["managementAuthority"] = "not-applicable"
-
     with pytest.raises(jsonschema.ValidationError):
-        validate_document(document)
+        validate_document(with_artifact(managementAuthority="not-applicable"))

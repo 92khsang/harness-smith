@@ -75,6 +75,10 @@ def _registry() -> dict[str, DiagnosticSpec]:
         "HS-CONSUMER-VERSION-MISMATCH": (warning, "Record `source-revision`, or update `version`"),
         "HS-CONSUMER-BINDING-CHANGED": (warning, "Update `binding` and re-confirm `resolution`"),
         # Rules
+        "HS-RULE-FILE-UNREADABLE": (
+            error_1,
+            "Make the rule readable UTF-8 text, then rerun",
+        ),
         "HS-RULE-FRONTMATTER-INVALID": (error_1, "Fix the YAML"),
         "HS-RULE-METADATA-UNREADABLE": (error_1, "Correct the namespaced mapping"),
         "HS-RULE-ENFORCEMENT-UNVERIFIED": (

@@ -202,6 +202,7 @@
         "HS-REFERENCE-DANGLING",
         "HS-REPOSITORY-ROOT-NOT-FOUND",
         "HS-RULE-ENFORCEMENT-UNVERIFIED",
+        "HS-RULE-FILE-UNREADABLE",
         "HS-RULE-FRONTMATTER-INVALID",
         "HS-RULE-ID-DUPLICATE",
         "HS-RULE-METADATA-UNREADABLE",
@@ -484,6 +485,14 @@
         "after": {}
       }
     },
+    "managementAuthority": {
+      "enum": [
+        "local",
+        "harness-smith",
+        "external-plugin",
+        "unknown"
+      ]
+    },
     "capabilityValue": {
       "enum": [
         "managed",
@@ -577,12 +586,7 @@
         "managementAuthority": {
           "oneOf": [
             {
-              "enum": [
-                "local",
-                "harness-smith",
-                "external-plugin",
-                "unknown"
-              ]
+              "$ref": "#/$defs/managementAuthority"
             },
             {
               "type": "null"
@@ -623,7 +627,53 @@
             "type": "string"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "enum": [
+                  "repository",
+                  "plugin"
+                ]
+              }
+            },
+            "required": [
+              "scope"
+            ]
+          },
+          "then": {
+            "properties": {
+              "managementAuthority": {
+                "$ref": "#/$defs/managementAuthority"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "enum": [
+                  "user-global",
+                  "external"
+                ]
+              }
+            },
+            "required": [
+              "scope"
+            ]
+          },
+          "then": {
+            "properties": {
+              "managementAuthority": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
     },
     "artifactContainer": {
       "type": "object",

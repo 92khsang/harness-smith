@@ -66,6 +66,33 @@ def test_every_reported_artifact_carries_its_locator_type_and_scope(repository: 
         assert entry["scope"] == "repository"
 
 
+def test_a_repository_artifact_holds_an_authority_value_rather_than_none(
+    repository: Path,
+) -> None:
+    """A repository artifact is inside the scope where authority applies, so an unresolved one
+    is reported as `unknown` and refuses mutation."""
+    run = audit(repository, POPULATED)
+
+    for entry in artifacts(run):
+        assert entry["managementAuthority"] == "unknown"
+        assert entry["sets"] == ["inventoried"]
+
+
+def test_a_rule_whose_bytes_are_not_text_is_not_reported_as_broken_yaml(
+    repository: Path,
+) -> None:
+    write_tree(repository, {".claude/rules/keep.md": "# keep\n"})
+    (repository / ".claude" / "rules" / "broken.md").write_bytes(b"---\nname: \xff\xfe\n---\n")
+
+    run = run_cli("surface-audit", "--format", "json", cwd=repository)
+
+    assert run.exit_code == 1
+    assert run.diagnostic_codes == ["HS-RULE-FILE-UNREADABLE"]
+    finding = run.document["diagnostics"][0]
+    assert finding["remediation"] == "Make the rule readable UTF-8 text, then rerun"
+    assert "UTF-8" in finding["message"]
+
+
 def test_the_settings_file_is_reported_as_a_container(repository: Path) -> None:
     run = audit(repository, POPULATED)
 

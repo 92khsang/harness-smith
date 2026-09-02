@@ -12,15 +12,22 @@ The runtime behaviour this encodes, from the Claude Code documentation:
   (https://code.claude.com/docs/en/memory)
 - ``.claude/rules/`` is discovered recursively, and a rule's ``paths`` frontmatter scopes it to
   a glob (https://code.claude.com/docs/en/memory, .../claude-directory)
-- a project skill's command name comes from its own directory name and a file in
-  ``.claude/commands/`` from its file name; for a project skill the frontmatter ``name`` is
-  only a display label (https://code.claude.com/docs/en/slash-commands)
+- a project skill is ``.claude/skills/<name>/SKILL.md``, exactly one directory deep, and its
+  command name is that directory's name; a file in ``.claude/commands/`` is named by its file
+  name, and for either the frontmatter ``name`` is only a display label
+  (https://code.claude.com/docs/en/slash-commands)
+
+A deeper ``SKILL.md`` is not a project skill. A plugin reaches one by declaring its path in the
+plugin manifest, which is the adapter's manifest-aware discovery, and a nested project skill
+lives under its own subtree's ``.claude/skills/``, which needs the exclusion rules that bound a
+repository-wide walk. Neither is discovered here.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import assert_never
 
 from harness_smith.artifacts import (
     Activation,
@@ -30,13 +37,15 @@ from harness_smith.artifacts import (
     ContainerFormat,
     Discovery,
     DiscoveryReport,
+    GovernanceSet,
     InventoriedArtifact,
+    ManagementAuthority,
     Provenance,
     Representation,
     Scope,
 )
 from harness_smith.diagnostics import Diagnostic
-from harness_smith.frontmatter import FrontmatterState, read_frontmatter_file
+from harness_smith.frontmatter import Frontmatter, FrontmatterState, read_frontmatter_file
 from harness_smith.vocabulary import Subject, SubjectKind
 
 PROJECT_ENTRY_POINTS: tuple[str, ...] = ("CLAUDE.md", ".claude/CLAUDE.md")
@@ -46,8 +55,9 @@ COMMANDS_DIRECTORY = ".claude/commands"
 AGENTS_DIRECTORY = ".claude/agents"
 PROJECT_SETTINGS = ".claude/settings.json"
 
-SKILL_FILE = "SKILL.md"
-MARKDOWN = "*.md"
+# A project skill is exactly one directory deep; a Markdown artifact directory is walked whole.
+PROJECT_SKILLS = "*/SKILL.md"
+MARKDOWN_TREE = "**/*.md"
 
 
 @dataclass(frozen=True)
@@ -76,10 +86,12 @@ def _artifact(
     """A repository artifact as discovery alone can describe it.
 
     Discovery establishes location, type and representation. Provenance is authored until a
-    lock records otherwise, and everything scanned here is a location the runtime loads
-    from, so the artifact is harness-relevant by construction. Management Authority and the
-    governance sets are resolved by classification against the manifest, the lock and the
-    external-evidence snapshot, so discovery asserts neither.
+    lock records otherwise; everything scanned here is a location the runtime loads from, so
+    the artifact is harness-relevant and Inventoried by construction. Management Authority
+    reads as ``unknown`` because resolving it needs the manifest, the lock and Writer evidence
+    that discovery never opens, and ``unknown`` refuses mutation, which is the safe answer to
+    give before classification runs. Classification computes the authority and the remaining
+    governance sets.
     """
     return InventoriedArtifact(
         locator=locator,
@@ -87,11 +99,11 @@ def _artifact(
         scope=Scope.REPOSITORY,
         representation=representation,
         provenance=Provenance.AUTHORED,
-        management_authority=None,
+        management_authority=ManagementAuthority.UNKNOWN,
         activation=Activation.UNKNOWN,
         activation_cause=ActivationCause.RUNTIME_STATE_NOT_READ,
         harness_relevant=True,
-        sets=(),
+        sets=(GovernanceSet.INVENTORIED,),
     )
 
 
@@ -116,19 +128,28 @@ def _entry_points(root: Path) -> _Scan:
 def _rules(root: Path) -> _Scan:
     artifacts: list[InventoriedArtifact] = []
     diagnostics: list[Diagnostic] = []
-    for path in _files(root / RULES_DIRECTORY, MARKDOWN):
+    for path in _files(root / RULES_DIRECTORY, MARKDOWN_TREE):
         locator = _locator(root, path)
-        frontmatter = read_frontmatter_file(path)
-        if frontmatter.state is FrontmatterState.UNREADABLE:
-            diagnostics.append(
-                Diagnostic.of(
-                    "HS-RULE-FRONTMATTER-INVALID",
-                    Subject(SubjectKind.ARTIFACT, locator),
-                    message=frontmatter.reason,
-                )
-            )
+        finding = _frontmatter_finding(locator, read_frontmatter_file(path))
+        if finding is not None:
+            diagnostics.append(finding)
         artifacts.append(_artifact(locator, ArtifactType.RULE, Representation.FILE))
     return _Scan(tuple(artifacts), tuple(diagnostics))
+
+
+def _frontmatter_finding(locator: str, frontmatter: Frontmatter) -> Diagnostic | None:
+    """A rule with no frontmatter is a prose-only rule, not a broken one. The two ways a block
+    can fail are separate findings: one is the file, the other is the YAML written in it."""
+    match frontmatter.state:
+        case FrontmatterState.ABSENT | FrontmatterState.PARSED:
+            return None
+        case FrontmatterState.FILE_UNREADABLE:
+            code = "HS-RULE-FILE-UNREADABLE"
+        case FrontmatterState.INVALID:
+            code = "HS-RULE-FRONTMATTER-INVALID"
+        case _:
+            assert_never(frontmatter.state)
+    return Diagnostic.of(code, Subject(SubjectKind.ARTIFACT, locator), message=frontmatter.reason)
 
 
 def _skills(root: Path) -> _Scan:
@@ -137,16 +158,13 @@ def _skills(root: Path) -> _Scan:
     skills_directory = root / SKILLS_DIRECTORY
     directory_form: set[str] = set()
 
-    for path in _files(skills_directory, SKILL_FILE):
+    for path in _files(skills_directory, PROJECT_SKILLS):
         artifacts.append(
             _artifact(_locator(root, path), ArtifactType.SKILL, Representation.DIRECTORY)
         )
-        if path.parent != skills_directory:
-            # A project skill is named by its own directory. A SKILL.md sitting directly in the
-            # skills directory names no skill, so nothing can collide with it.
-            directory_form.add(path.parent.name)
+        directory_form.add(path.parent.name)
 
-    for path in _files(root / COMMANDS_DIRECTORY, MARKDOWN):
+    for path in _files(root / COMMANDS_DIRECTORY, MARKDOWN_TREE):
         locator = _locator(root, path)
         artifacts.append(_artifact(locator, ArtifactType.SKILL, Representation.LEGACY_COMMAND))
         if path.stem in directory_form:
@@ -167,7 +185,7 @@ def _agents(root: Path) -> _Scan:
     return _Scan(
         tuple(
             _artifact(_locator(root, path), ArtifactType.AGENT, Representation.FILE)
-            for path in _files(root / AGENTS_DIRECTORY, MARKDOWN)
+            for path in _files(root / AGENTS_DIRECTORY, MARKDOWN_TREE)
         )
     )
 
@@ -183,7 +201,7 @@ def _containers(root: Path) -> tuple[ArtifactContainer, ...]:
 def _files(directory: Path, pattern: str) -> list[Path]:
     if not directory.is_dir():
         return []
-    return sorted(path for path in directory.rglob(pattern) if path.is_file())
+    return sorted(path for path in directory.glob(pattern) if path.is_file())
 
 
 def _locator(root: Path, path: Path) -> str:

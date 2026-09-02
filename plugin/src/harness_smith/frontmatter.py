@@ -32,14 +32,22 @@ BLOCK_LINE_OFFSET = 2
 
 
 class FrontmatterState(StrEnum):
+    """Whether a file carries a frontmatter block, and if it does, why it could not be read.
+
+    The two failures are different in kind and answer to different diagnostics: one is about
+    the file's bytes, the other about the YAML those bytes spell out. A caller chooses on the
+    state rather than by reading the reason.
+    """
+
     ABSENT = "absent"
     PARSED = "parsed"
-    UNREADABLE = "unreadable"
+    INVALID = "invalid"
+    FILE_UNREADABLE = "file-unreadable"
 
 
 @dataclass(frozen=True)
 class Frontmatter:
-    """A file's frontmatter block: absent, parsed into fields, or unreadable with a reason."""
+    """A file's frontmatter block: absent, parsed into fields, or unread with a reason."""
 
     state: FrontmatterState
     fields: Mapping[str, object]
@@ -54,8 +62,14 @@ class Frontmatter:
         return cls(FrontmatterState.PARSED, fields, "")
 
     @classmethod
-    def unreadable(cls, reason: str) -> Frontmatter:
-        return cls(FrontmatterState.UNREADABLE, {}, reason)
+    def invalid(cls, reason: str) -> Frontmatter:
+        """The block is there and does not read as a mapping of fields."""
+        return cls(FrontmatterState.INVALID, {}, reason)
+
+    @classmethod
+    def file_unreadable(cls, reason: str) -> Frontmatter:
+        """The file's bytes never became text, so there was no block to look at."""
+        return cls(FrontmatterState.FILE_UNREADABLE, {}, reason)
 
 
 def read_frontmatter(text: str) -> Frontmatter:
@@ -68,11 +82,11 @@ def read_frontmatter(text: str) -> Frontmatter:
             # Every line of the block keeps its own terminator: a block scalar's final newline
             # belongs to its value, and dropping it would change what the field says.
             return _parse("".join(f"{line}\n" for line in lines[1:index]))
-    return Frontmatter.unreadable("the frontmatter block opens with --- and is never closed")
+    return Frontmatter.invalid("the frontmatter block opens with --- and is never closed")
 
 
 def read_frontmatter_file(path: Path) -> Frontmatter:
-    """Read ``path``'s frontmatter. A file that cannot be read at all has no readable block.
+    """Read ``path``'s frontmatter. A file whose bytes never become text has no block.
 
     No reason names the path: a diagnostic carries the Locator in its subject, and messages
     stay free of absolute paths.
@@ -80,9 +94,9 @@ def read_frontmatter_file(path: Path) -> Frontmatter:
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return Frontmatter.unreadable("the file is not valid UTF-8 text")
+        return Frontmatter.file_unreadable("the file is not valid UTF-8 text")
     except OSError as error:
-        return Frontmatter.unreadable(
+        return Frontmatter.file_unreadable(
             f"the file could not be read: {error.strerror or 'unknown error'}"
         )
     return read_frontmatter(text)
@@ -102,16 +116,16 @@ def _parse(block: str) -> Frontmatter:
     try:
         loaded = _parser().load(block)
     except YAMLError as error:
-        return Frontmatter.unreadable(_yaml_reason(error))
+        return Frontmatter.invalid(_yaml_reason(error))
     if loaded is None:
         return Frontmatter.parsed({})
     if not isinstance(loaded, dict):
-        return Frontmatter.unreadable(
+        return Frontmatter.invalid(
             f"the frontmatter is a YAML {_shape(loaded)}, not a mapping of fields"
         )
     unnamed = [key for key in loaded if not isinstance(key, str)]
     if unnamed:
-        return Frontmatter.unreadable(
+        return Frontmatter.invalid(
             f"the frontmatter has a field name that is not text: {unnamed[0]!r}"
         )
     fields: dict[str, object] = dict(loaded)
