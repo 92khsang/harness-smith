@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from harness_smith.cli import preferred_format
 from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
 from tests.support import BOOTSTRAP_PATH, validate_document
 
@@ -18,6 +20,11 @@ STUB_UV = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$UV_CALLS"
 printf 'preparing the environment\\n'
+# uv holds a process lock on the target environment; a stub that did not would rewrite an
+# interpreter another launcher is executing.
+lock="$UV_PROJECT_ENVIRONMENT.lock"
+until mkdir "$lock" 2>/dev/null; do sleep 0.02; done
+trap 'rmdir "$lock"' EXIT
 project=""
 previous=""
 for argument in "$@"; do
@@ -120,7 +127,7 @@ def test_the_first_operation_prepares_the_environment_and_hands_over(
 
     assert run.returncode == 0, run.stderr
     assert len(plugin_data.uv_invocations) == 1
-    assert run.stdout == "stub-python[A] -m harness_smith surface-audit --format json\n"
+    assert run.stdout == "stub-python[A] -P -m harness_smith surface-audit --format json\n"
     assert plugin_data.ready_environments
 
 
@@ -132,6 +139,18 @@ def test_a_later_operation_is_a_no_op(plugin_data: PluginData) -> None:
 
     assert second.returncode == 0
     assert len(plugin_data.uv_invocations) == 1
+
+
+def test_the_working_directory_is_kept_off_the_interpreter_path(
+    plugin_data: PluginData,
+) -> None:
+    """The tool runs from inside the repository it audits, so that directory must not be able
+    to supply a harness_smith package of its own."""
+    launcher = plugin_data.install("A")
+
+    run = plugin_data.run(launcher, "surface-audit")
+
+    assert run.stdout.startswith("stub-python[A] -P -m harness_smith")
 
 
 def test_the_environment_holds_its_own_copy_of_the_source(plugin_data: PluginData) -> None:
@@ -215,8 +234,113 @@ def test_preparation_progress_never_reaches_stdout(plugin_data: PluginData) -> N
 
     run = plugin_data.run(launcher, "surface-audit", "--format", "json")
 
-    assert run.stdout == "stub-python[A] -m harness_smith surface-audit --format json\n"
+    assert run.stdout == "stub-python[A] -P -m harness_smith surface-audit --format json\n"
     assert "preparing the environment" in run.stderr
+
+
+def test_a_plugin_root_with_nothing_to_fingerprint_is_reported_as_a_document(
+    tmp_path: Path,
+) -> None:
+    """The fingerprint is computed before the environment is chosen, and its failures used to
+    be raised inside a command substitution that captured the document instead of emitting
+    it."""
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    for path in ("pyproject.toml", "uv.lock"):
+        (launcher.parent.parent / path).unlink()
+    for directory in ("src", "resources"):
+        subprocess.run(["rm", "-rf", str(launcher.parent.parent / directory)], check=True)
+
+    run = plugin_data.run(launcher, "surface-audit", "--format", "json")
+
+    assert run.returncode == 3
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert [entry["code"] for entry in document["diagnostics"]] == ["HS-BOOTSTRAP-FAILED"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads unreadable files")
+def test_an_unreadable_source_file_is_reported_as_a_document(tmp_path: Path) -> None:
+    """A failure inside the digest pipeline used to escape as the raw status of whichever
+    stage failed, outside the declared exit vocabulary and with no document at all."""
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    (launcher.parent.parent / "src" / "harness_smith" / "cli.py").chmod(0o000)
+
+    run = plugin_data.run(launcher, "surface-audit", "--format", "json")
+
+    assert run.returncode == 3
+    validate_document(json.loads(run.stdout))
+
+
+def test_no_identifiable_data_directory_is_reported_as_a_document(tmp_path: Path) -> None:
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+
+    run = subprocess.run(
+        [str(launcher), "surface-audit", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": plugin_data.path},
+    )
+
+    assert run.returncode == 3
+    validate_document(json.loads(run.stdout))
+
+
+def test_a_failure_message_carries_no_path_into_the_document(tmp_path: Path) -> None:
+    """Paths belong on stderr. In the document they would be both non-reproducible and, when
+    they carry a control character, unparseable."""
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    unusable = tmp_path / "not	writable" / "data"
+
+    run = subprocess.run(
+        [str(launcher), "surface-audit", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": plugin_data.path, "HARNESS_SMITH_DATA_DIR": str(unusable)},
+    )
+
+    assert run.returncode == 3
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert "\t" not in document["diagnostics"][0]["message"]
+    assert str(unusable) not in run.stdout
+
+
+def test_an_interrupted_preparation_leaves_no_readiness_claim(tmp_path: Path) -> None:
+    """A marker that outlived a half-finished sync would assert an environment that cannot
+    import the package, and nothing would ever prepare it again."""
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    plugin_data.run(launcher, "surface-audit")
+    stub = Path(plugin_data.path.split(":")[0]) / "uv"
+    stub.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    stub.chmod(0o755)
+    for environment in (plugin_data.data_dir / "venvs").iterdir():
+        if environment.is_dir():
+            (environment / "bin" / "python").unlink()
+
+    failed = plugin_data.run(launcher, "surface-audit", "--format", "json")
+
+    assert failed.returncode == 3
+    assert plugin_data.ready_environments == []
+
+
+def test_concurrent_launchers_at_one_fingerprint_all_succeed(tmp_path: Path) -> None:
+    """Every launcher that loses the race to write the marker is still looking at a prepared
+    environment, and must not report a failure for work that succeeded."""
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        runs = list(pool.map(lambda _: plugin_data.run(launcher, "surface-audit"), range(6)))
+
+    assert [run.returncode for run in runs] == [0] * 6
+    assert [run.stderr for run in runs if run.returncode] == []
+    assert list((plugin_data.data_dir / "venvs").glob("*.partial")) == []
 
 
 def test_a_missing_uv_is_an_environment_failure_reported_as_a_document(tmp_path: Path) -> None:
@@ -293,3 +417,37 @@ def test_a_failure_is_a_document_when_the_last_format_is_json(
     document = json.loads(run.stdout)
     validate_document(document)
     assert document["status"] == "environment-error"
+
+
+# The launcher decides the format of a bootstrap failure before Python exists, so its scan and
+# the parser's must agree on every argv, not only on the well-formed ones.
+SCANNER_ARGUMENTS = [
+    ("surface-audit",),
+    ("surface-audit", "--format", "json"),
+    ("surface-audit", "--format=json"),
+    ("surface-audit", "--format", "json", "--format", "text"),
+    ("surface-audit", "--format", "text", "--format", "json"),
+    ("surface-audit", "--format=json", "--format=text"),
+    ("surface-audit", "--format=text", "--format=json"),
+    ("surface-audit", "--format", "--format=json"),
+    ("surface-audit", "--format=text", "--format", "--format=json"),
+    ("surface-audit", "--format", "json", "--format"),
+    ("surface-audit", "--format", "nonsense"),
+    ("surface-audit", "--format"),
+]
+
+
+@pytest.mark.parametrize("arguments", SCANNER_ARGUMENTS, ids=lambda a: " ".join(a[1:]) or "bare")
+def test_the_launcher_resolves_the_format_exactly_as_the_parser_would(
+    tmp_path: Path, arguments: tuple[str, ...]
+) -> None:
+    plugin_data = PluginData(tmp_path, with_uv=False)
+    launcher = plugin_data.install("A")
+
+    run = plugin_data.run(launcher, *arguments)
+
+    assert run.returncode == 3
+    emitted_a_document = bool(run.stdout.strip())
+    assert emitted_a_document == (preferred_format(list(arguments)) == "json")
+    if emitted_a_document:
+        validate_document(json.loads(run.stdout))

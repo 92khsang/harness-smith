@@ -40,9 +40,13 @@ class CliRun:
 
 
 def run_cli(*arguments: str, cwd: Path) -> CliRun:
-    """Run the tool the way automation does: as a subprocess, observed at its boundary."""
+    """Run the tool the way automation does: as a subprocess, observed at its boundary.
+
+    ``-P`` mirrors the launcher: the working directory is the repository under audit and must
+    not reach ``sys.path``.
+    """
     completed = subprocess.run(
-        [sys.executable, "-m", "harness_smith", *arguments],
+        [sys.executable, "-P", "-m", "harness_smith", *arguments],
         cwd=cwd,
         capture_output=True,
         text=True,
