@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -13,6 +14,8 @@ from harness_smith.operations import DECLARED_OPERATIONS
 from harness_smith.result import ChangeAction, PatchFormat
 from harness_smith.vocabulary import Mode, Severity, Status, SubjectKind
 from tests.support import schema, validate_document
+
+CODE_SHAPE = re.compile(r"^HS-[A-Z0-9]+(-[A-Z0-9]+)*$")
 
 
 def enum_at(pointer: str) -> list[str]:
@@ -42,14 +45,24 @@ def test_schema_enums_match_the_implementation(pointer: str, expected: list[str]
     assert enum_at(pointer) == expected
 
 
-def test_every_registered_diagnostic_code_matches_the_schema_pattern() -> None:
-    import re
+def test_the_diagnostic_vocabulary_is_closed_and_matches_the_registry() -> None:
+    """A code the registry does not carry is a schema error, not merely a badly shaped one.
+    This is the parity check: an addition or an omission on either side fails here."""
+    assert enum_at("$defs/diagnosticCode/enum") == sorted(DIAGNOSTIC_REGISTRY)
 
-    pattern = re.compile(schema()["$defs"]["diagnosticCode"]["pattern"])
 
-    unmatched = [code for code in DIAGNOSTIC_REGISTRY if not pattern.fullmatch(code)]
+def test_every_registered_diagnostic_code_follows_the_naming_shape() -> None:
+    unmatched = [code for code in DIAGNOSTIC_REGISTRY if not CODE_SHAPE.fullmatch(code)]
 
     assert unmatched == []
+
+
+def test_the_schema_rejects_a_code_the_registry_does_not_carry() -> None:
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document["diagnostics"][0]["code"] = "HS-NOT-A-REAL-CODE"
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(document)
 
 
 def _object_schemas(node: object, path: str = "") -> list[tuple[str, dict[str, Any]]]:
@@ -191,6 +204,31 @@ def test_the_schema_rejects_a_created_file_that_claims_a_previous_digest() -> No
 def test_the_schema_rejects_an_artifact_type_outside_the_taxonomy() -> None:
     document = deepcopy(POPULATED_SURFACE_AUDIT)
     document["data"]["artifacts"][0]["type"] = "workflow"
+
+    with pytest.raises(jsonschema.ValidationError):
+        validate_document(document)
+
+
+def test_management_authority_keeps_its_four_values_and_is_null_where_it_does_not_apply() -> None:
+    """Authority applies only where mutation is conceivable. Outside repository and plugin
+    scope the answer is that there is no authority, which is null rather than a fifth value."""
+    assert enum_at("$defs/inventoriedArtifact/properties/managementAuthority/oneOf/0/enum") == [
+        "local",
+        "harness-smith",
+        "external-plugin",
+        "unknown",
+    ]
+
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document["data"]["artifacts"][0]["scope"] = "user-global"
+    document["data"]["artifacts"][0]["managementAuthority"] = None
+
+    validate_document(document)
+
+
+def test_the_schema_rejects_an_authority_outside_the_four_values() -> None:
+    document = deepcopy(POPULATED_SURFACE_AUDIT)
+    document["data"]["artifacts"][0]["managementAuthority"] = "not-applicable"
 
     with pytest.raises(jsonschema.ValidationError):
         validate_document(document)

@@ -17,13 +17,13 @@ An agent working in the repository must be able to read the standard whether or 
 
   | File | Holds | Why |
   | :--- | :--- | :--- |
-  | `harness.manifest.yaml` | `managementAuthority`, `updatePolicy`, declared Consumer and Writer relations | Human policy choices |
+  | `harness.manifest.yaml` | Management Authority, `updatePolicy`, declared Consumer and Writer relations | Human policy choices |
   | `harness.lock.json` | provenance, source id, source version, content digest, drift baseline | Computed, tool-owned |
   | Rule frontmatter | `enforced-by`, `verified-by`, and other rule-local relations | Belongs with its subject |
 
-  `pinned` versus `local` is a choice someone makes, not a result anything computes, so it sits with the authority declaration in the manifest rather than in the lock.
+  The manifest's `authority` mapping records Management Authority through each entry's `authority` or `managed-by` field. `pinned` versus `local` is a choice someone makes, not a result anything computes, so `updatePolicy` sits beside that declaration in the manifest rather than in the lock.
 
-- A local edit makes the digest disagree with the recorded baseline, which is unacknowledged drift. Approving it is one composite transition across both files: the manifest's `updatePolicy` becomes `local` and its `managementAuthority` becomes `local`, while the lock's provenance becomes `adopted` and its approved digest and baseline are refreshed, keeping the standard version the edit was based on. Pinning therefore does not forbid a local override; it separates accidental drift from deliberate change.
+- A local edit makes the digest disagree with the recorded baseline, which is unacknowledged drift. Approving it is one composite transition across both files: the manifest entry's `updatePolicy` becomes `local` and its `managed-by` is replaced by `authority: local`, while the lock's provenance becomes `adopted` and its approved digest and baseline are refreshed, keeping the standard version the edit was based on. Pinning therefore does not forbid a local override; it separates accidental drift from deliberate change.
 - That transition spans two files, so it is a concrete instance of the bounded write atomicity in ADR-0008: a crash partway through can leave the manifest updated and the lock not. The half-applied state is detectable rather than silent: a manifest in the post-adoption state with a lock still describing the pre-adoption state, or the inverse combination, raises `HS-AUTHORITY-LOCK-MANIFEST-MISMATCH`.
 - Upgrade behaviour follows the update policy: `pinned` is replaced after an explicit diff and approval, `local` is never overwritten automatically and becomes a manual merge.
 - The compatibility rules apply to `standardVersion`, the version of the normative contract, and not to the plugin's own release version. A major mismatch is an error, an older minor in the repository is an upgrade warning, and a repository minor ahead of the validator is a validator-too-old error. There is no automatic migration in v1.

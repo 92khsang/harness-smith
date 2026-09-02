@@ -187,7 +187,7 @@ def _registry() -> dict[str, DiagnosticSpec]:
         # Environment failures the tool itself can hit before or during dispatch.
         "HS-BOOTSTRAP-FAILED": (
             error_3,
-            "Install `uv` and a supported Python, then re-run",
+            "Resolve the environment problem reported on stderr, then re-run",
         ),
         "HS-INTERNAL-ERROR": (
             error_3,

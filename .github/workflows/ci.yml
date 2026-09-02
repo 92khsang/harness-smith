@@ -8,13 +8,22 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The supported floor and the current stable release. The lock is universal across
+        # requires-python, so both resolve from the same uv.lock.
+        python-version: ["3.12", "3.14"]
     defaults:
       run:
         working-directory: plugin
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: "0.12.9"
+          python-version: ${{ matrix.python-version }}
+          working-directory: plugin
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run ruff format --check .
