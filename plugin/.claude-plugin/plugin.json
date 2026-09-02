@@ -1,0 +1,13 @@
+{
+  "name": "harness-smith",
+  "description": "Authors and governs the repository-owned agent harness while auditing externally supplied harness surfaces.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Hayes",
+    "email": "92khsang@gmail.com"
+  },
+  "homepage": "https://github.com/92khsang/harness-smith",
+  "repository": "https://github.com/92khsang/harness-smith",
+  "license": "MIT",
+  "keywords": ["harness", "governance", "skills", "claude-code"]
+}

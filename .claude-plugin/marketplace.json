@@ -1,0 +1,14 @@
+{
+  "name": "harness-smith",
+  "owner": {
+    "name": "Hayes",
+    "email": "92khsang@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "harness-smith",
+      "source": "./plugin",
+      "description": "Authors and governs the repository-owned agent harness while auditing externally supplied harness surfaces."
+    }
+  ]
+}
