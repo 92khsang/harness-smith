@@ -3,29 +3,55 @@
 #
 # The plugin prepares its Python environment lazily, on the first explicit operation, rather
 # than from a SessionStart hook: a tool that audits other people's automation footprint should
-# not install a session-start side effect. The guard is a venv presence test plus a fingerprint
-# over pyproject.toml, uv.lock, and the environment's Python minor version, so every later run
-# is a no-op. The environment lives under the plugin data directory, which survives updates;
-# the plugin root does not.
+# not install a session-start side effect.
+#
+# The environment lives under the plugin data directory, which survives plugin updates, and is
+# keyed by a fingerprint of the content that will run: pyproject.toml, uv.lock, and every file
+# under src/ and resources/. Two plugin versions therefore never share one environment, which
+# matters because ${CLAUDE_PLUGIN_ROOT} changes on every update while ${CLAUDE_PLUGIN_DATA}
+# does not -- a shared environment would leave a new version running the previous version's
+# code whenever the dependency metadata happened to be unchanged. For the same reason the
+# project is installed with --no-editable, so the environment holds its own copy of the source
+# instead of pointing back at a plugin root that is about to be replaced.
+#
+# The readiness marker is keyed by the same fingerprint and written by rename, so a marker
+# never outlives the environment it describes and a half-finished preparation is never
+# mistaken for a complete one.
 set -euo pipefail
 
 cli_arguments=("$@")
 
 plugin_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 data_dir=${HARNESS_SMITH_DATA_DIR:-${CLAUDE_PLUGIN_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/harness-smith}}
-venv=$data_dir/venv
-stamp=$data_dir/environment.fingerprint
+environments=$data_dir/venvs
 
-json_requested() {
-  local previous='' argument
+# Everything the environment must reflect. Skills and the launcher itself are excluded: the
+# runtime reads those from the plugin root directly and they never enter the environment.
+FINGERPRINTED_PATHS=(pyproject.toml uv.lock src resources)
+
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_command=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_command=(shasum -a 256)
+else
+  sha256_command=()
+fi
+
+requested_format() {
+  local chosen='text' previous='' argument candidate
   for argument in ${cli_arguments[@]+"${cli_arguments[@]}"}; do
-    if [[ $argument == '--format=json' ]] ||
-      { [[ $previous == '--format' ]] && [[ $argument == 'json' ]]; }; then
-      return 0
+    candidate=''
+    if [[ $previous == '--format' ]]; then
+      candidate=$argument
+    elif [[ $argument == --format=* ]]; then
+      candidate=${argument#--format=}
+    fi
+    if [[ $candidate == 'json' || $candidate == 'text' ]]; then
+      chosen=$candidate
     fi
     previous=$argument
   done
-  return 1
+  printf '%s' "$chosen"
 }
 
 # Bootstrap failure is an environment failure, exit 3. Automation asking for JSON gets a
@@ -33,7 +59,7 @@ json_requested() {
 fail_environment() {
   local message=$1 escaped
   printf 'harness-smith: %s\n' "$message" >&2
-  if json_requested; then
+  if [[ $(requested_format) == 'json' ]]; then
     escaped=${message//\\/\\\\}
     escaped=${escaped//\"/\\\"}
     printf '{\n'
@@ -47,7 +73,7 @@ fail_environment() {
     printf '      "severity": "error",\n'
     printf '      "subject": { "kind": "environment", "locator": null },\n'
     printf '      "message": "%s",\n' "$escaped"
-    printf '      "remediation": "Install `uv` and a supported Python, then re-run"\n'
+    printf '      "remediation": "Resolve the environment problem reported on stderr, then re-run"\n'
     printf '    }\n'
     printf '  ],\n'
     printf '  "changes": [],\n'
@@ -57,46 +83,47 @@ fail_environment() {
   exit 3
 }
 
-digest_of() {
-  local path=$1
-  if [[ ! -f $path ]]; then
-    printf 'absent'
-    return 0
+# The digest covers relative paths and file contents only, so the same content installed at two
+# different plugin roots fingerprints identically.
+content_fingerprint() {
+  local listing
+  listing=$(cd "$plugin_root" && find "${FINGERPRINTED_PATHS[@]}" -type f 2>/dev/null |
+    LC_ALL=C sort)
+  if [[ -z $listing ]]; then
+    fail_environment 'the plugin root holds no readable source to fingerprint'
   fi
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$path" | cut -d' ' -f1
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$path" | cut -d' ' -f1
-  else
-    fail_environment 'no sha256 tool is available (sha256sum or shasum)'
-  fi
+  printf '%s\n' "$listing" |
+    (cd "$plugin_root" && tr '\n' '\0' | xargs -0 "${sha256_command[@]}") |
+    "${sha256_command[@]}" | cut -d' ' -f1
 }
 
-environment_fingerprint() {
-  local python_version
-  python_version=$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$venv/pyvenv.cfg" \
-    2>/dev/null | head -n 1)
-  printf '%s %s %s\n' \
-    "$(digest_of "$plugin_root/pyproject.toml")" \
-    "$(digest_of "$plugin_root/uv.lock")" \
-    "${python_version:-unknown}"
-}
+if [[ ${#sha256_command[@]} -eq 0 ]]; then
+  fail_environment 'no sha256 tool is available (sha256sum or shasum)'
+fi
+
+fingerprint=$(content_fingerprint)
+venv=$environments/$fingerprint
+marker=$environments/$fingerprint.ready
 
 hand_over() {
   exec "$venv/bin/python" -m harness_smith ${cli_arguments[@]+"${cli_arguments[@]}"}
 }
 
-if [[ -x $venv/bin/python && -f $stamp ]] &&
-  [[ $(cat "$stamp") == "$(environment_fingerprint)" ]]; then
+if [[ -f $marker && -x $venv/bin/python ]]; then
   hand_over
 fi
 
 command -v uv >/dev/null 2>&1 ||
   fail_environment 'uv is not on PATH; it is required to prepare the harness-smith environment'
 
-mkdir -p "$data_dir"
-UV_PROJECT_ENVIRONMENT=$venv uv sync --frozen --no-dev --project "$plugin_root" >&2 ||
-  fail_environment 'environment preparation failed: uv sync --frozen --no-dev'
+mkdir -p "$environments" ||
+  fail_environment "the plugin data directory is not writable: $environments"
 
-environment_fingerprint >"$stamp"
+UV_PROJECT_ENVIRONMENT=$venv uv sync --frozen --no-dev --no-editable --project "$plugin_root" >&2 ||
+  fail_environment 'environment preparation failed: uv sync --frozen --no-dev --no-editable'
+
+printf '%s\n' "$fingerprint" >"$marker.partial" &&
+  mv -f "$marker.partial" "$marker" ||
+  fail_environment "the readiness marker could not be written: $marker"
+
 hand_over

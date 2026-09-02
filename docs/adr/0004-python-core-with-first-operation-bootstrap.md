@@ -13,10 +13,11 @@ Long-term maintainability by this repository's author is the deciding criterion 
 
 ## Why not the documented hook
 
-A tool that audits other people's context and automation footprint should not install a session-start side effect in every repository where it is enabled. The check is cheap — a venv presence test and a fingerprint over `pyproject.toml`, `uv.lock`, and the Python minor version — so session-start cost stays zero.
+A tool that audits other people's context and automation footprint should not install a session-start side effect in every repository where it is enabled. The check is cheap — a fingerprint over `pyproject.toml`, `uv.lock`, and every file under `src/` and `resources/`, then a readiness test for the environment that fingerprint names — so session-start cost stays zero.
 
 ## Consequences
 
 - The first operation after an install or a dependency change is slower, and a preparation failure surfaces mid-task rather than at session start.
+- Environments are keyed by that fingerprint under `${CLAUDE_PLUGIN_DATA}/venvs/`, and the project is installed with `--no-editable`. `${CLAUDE_PLUGIN_ROOT}` changes on every plugin update while `${CLAUDE_PLUGIN_DATA}` survives it, so a single shared environment would leave a new version running the previous version's code whenever the dependency metadata happened to be unchanged. Two versions never share an environment, and an environment never points back at a plugin root that is about to be replaced. The cost is one environment per distinct plugin content.
 - `uv` and Python are declared runtime prerequisites rather than hidden. CI does not rely on the lazy path; it runs `uv sync --frozen` explicitly.
 - The standalone validator must run without Claude Code installed at all, so the Claude Code version floor applies only to plugin-hosted operation and to `--compat`.

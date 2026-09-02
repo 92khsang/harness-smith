@@ -146,8 +146,72 @@
   ],
   "$defs": {
     "diagnosticCode": {
-      "type": "string",
-      "pattern": "^HS-[A-Z0-9]+(-[A-Z0-9]+)*$"
+      "enum": [
+        "HS-ARTIFACT-TYPE-UNKNOWN",
+        "HS-ARTIFACT-UNACKNOWLEDGED-DRIFT",
+        "HS-AUTHORITY-CLASSIFICATION-REQUIRED",
+        "HS-AUTHORITY-CONFLICT",
+        "HS-AUTHORITY-CONTESTED-WRITE",
+        "HS-AUTHORITY-DECLARED-PLUGIN-MISSING",
+        "HS-AUTHORITY-LOCK-MANIFEST-MISMATCH",
+        "HS-AUTHORITY-ORPHAN-DECLARATION",
+        "HS-AUTHORITY-REVIEW-REQUIRED",
+        "HS-AUTHORITY-UNDECLARED-EXTERNAL-WRITER",
+        "HS-BOOTSTRAP-FAILED",
+        "HS-CLI-USAGE",
+        "HS-COMPAT-PROBE-UNAVAILABLE",
+        "HS-COMPAT-REGRESSION",
+        "HS-COMPAT-UNVERIFIED",
+        "HS-CONSUMED-ARTIFACT-MISSING",
+        "HS-CONSUMER-BINDING-CHANGED",
+        "HS-CONSUMER-EVIDENCE-MISSING",
+        "HS-CONSUMER-PLUGIN-MISSING",
+        "HS-CONSUMER-REVISION-MISMATCH",
+        "HS-CONSUMER-SKILL-MISSING",
+        "HS-CONSUMER-VERSION-MISMATCH",
+        "HS-DEPENDENCY-ON-TRANSIENT-SOURCE",
+        "HS-DOC-UNREGISTERED-IN-RESERVED-PATH",
+        "HS-EFFECTIVE-HARNESS-UNCERTAIN",
+        "HS-ENFORCEMENT-ORPHAN",
+        "HS-ENFORCEMENT-PLACEMENT-UNKNOWN",
+        "HS-ENFORCEMENT-TARGET-MISSING",
+        "HS-ENTRYPOINT-BUDGET-EXCEEDED",
+        "HS-ENTRYPOINT-CONTRACT-VIOLATION",
+        "HS-ENTRYPOINT-DUPLICATE",
+        "HS-GC-CANDIDATE-UNRECOVERABLE",
+        "HS-HARNESS-RELEVANCE-DOWNGRADED",
+        "HS-HOOK-CONTAINER-UNPARSEABLE",
+        "HS-HOOK-LOCATOR-AMBIGUOUS",
+        "HS-HOOK-LOCATOR-UNRESOLVED",
+        "HS-HOOK-RELOCATED",
+        "HS-INTERNAL-ERROR",
+        "HS-LOCK-INVALID",
+        "HS-MANIFEST-INVALID",
+        "HS-OVERLAP-IDENTIFIER-COLLISION",
+        "HS-PACKAGE-INVALID",
+        "HS-PACKAGE-VALIDATOR-FAILED",
+        "HS-PACKAGE-VALIDATOR-UNAVAILABLE",
+        "HS-PLACEMENT-INVALID",
+        "HS-PLAN-ALREADY-APPLIED",
+        "HS-PLAN-DOCUMENT-INVALID",
+        "HS-PLAN-RESUMED",
+        "HS-PLAN-STALE",
+        "HS-PLUGIN-COMPONENT-PATH-ESCAPES-ROOT",
+        "HS-PLUGIN-SHADOWED-DEFAULT-DIR",
+        "HS-PROVENANCE-MISSING",
+        "HS-REFERENCE-DANGLING",
+        "HS-REPOSITORY-ROOT-NOT-FOUND",
+        "HS-RULE-ENFORCEMENT-UNVERIFIED",
+        "HS-RULE-FRONTMATTER-INVALID",
+        "HS-RULE-ID-DUPLICATE",
+        "HS-RULE-METADATA-UNREADABLE",
+        "HS-RUNTIME-BELOW-MINIMUM",
+        "HS-SCOPE-LEAKAGE",
+        "HS-SKILL-NAME-SHADOWED",
+        "HS-STANDARD-UPGRADE-AVAILABLE",
+        "HS-STANDARD-VERSION-INCOMPATIBLE",
+        "HS-VALIDATOR-TOO-OLD"
+      ]
     },
     "locator": {
       "type": "string",
@@ -503,12 +567,18 @@
           ]
         },
         "managementAuthority": {
-          "enum": [
-            "local",
-            "harness-smith",
-            "external-plugin",
-            "unknown",
-            "not-applicable"
+          "oneOf": [
+            {
+              "enum": [
+                "local",
+                "harness-smith",
+                "external-plugin",
+                "unknown"
+              ]
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "activation": {
