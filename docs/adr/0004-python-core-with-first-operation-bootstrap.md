@@ -19,5 +19,5 @@ A tool that audits other people's context and automation footprint should not in
 
 - The first operation after an install or a dependency change is slower, and a preparation failure surfaces mid-task rather than at session start.
 - Environments are keyed by that fingerprint under `${CLAUDE_PLUGIN_DATA}/venvs/`, and the project is installed with `--no-editable`. `${CLAUDE_PLUGIN_ROOT}` changes on every plugin update while `${CLAUDE_PLUGIN_DATA}` survives it, so a single shared environment would leave a new version running the previous version's code whenever the dependency metadata happened to be unchanged. Two versions never share an environment, and an environment never points back at a plugin root that is about to be replaced. The cost is one environment per distinct plugin content.
-- `uv` and Python are declared runtime prerequisites rather than hidden. CI does not rely on the lazy path; it runs `uv sync --frozen` explicitly.
+- `uv` and Python are declared runtime prerequisites rather than hidden. Both CI and the bootstrap run `uv sync --locked`, which fails when the lock no longer describes `pyproject.toml`; `--frozen` would install a stale lock and report success.
 - The standalone validator must run without Claude Code installed at all, so the Claude Code version floor applies only to plugin-hosted operation and to `--compat`.

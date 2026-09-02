@@ -30,7 +30,7 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "bin"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
@@ -40,7 +40,7 @@ known-first-party = ["harness_smith", "tests"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "bin"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
