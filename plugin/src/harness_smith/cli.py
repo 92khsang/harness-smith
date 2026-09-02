@@ -65,15 +65,22 @@ def _add_shared_options(parser: argparse.ArgumentParser, *, suppress_defaults: b
 
 
 def build_parser() -> _Parser:
+    # Abbreviated spellings are refused: argparse would accept --forma=json while the
+    # pre-scan that decides the format of a pre-dispatch failure would not recognise it, so
+    # the same invocation would answer in two different formats depending on where it failed.
     parser = _Parser(
         prog=PROGRAM,
         description="Author and govern the repository-owned agent harness.",
+        allow_abbrev=False,
     )
     _add_shared_options(parser, suppress_defaults=False)
     subparsers = parser.add_subparsers(dest="operation", required=True, metavar="OPERATION")
     for name in sorted(REGISTRY):
         subparser = subparsers.add_parser(
-            name, prog=f"{PROGRAM} {name}", help=REGISTRY[name].spec.summary
+            name,
+            prog=f"{PROGRAM} {name}",
+            help=REGISTRY[name].spec.summary,
+            allow_abbrev=False,
         )
         _add_shared_options(subparser, suppress_defaults=True)
     return parser

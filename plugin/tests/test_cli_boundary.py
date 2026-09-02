@@ -191,3 +191,31 @@ def test_a_read_operation_leaves_the_repository_untouched(repository: Path) -> N
     run_cli("surface-audit", "--format", "json", cwd=repository)
 
     assert snapshot_tree(repository) == before
+
+
+def test_a_repository_holding_its_own_harness_smith_package_does_not_shadow_the_tool(
+    repository: Path,
+) -> None:
+    """The tool runs from inside the repository it audits, so that directory must never be
+    able to supply the package the tool is."""
+    package = repository / "harness_smith"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text('print("SHADOWED")\n', encoding="utf-8")
+
+    run = run_cli("surface-audit", "--format", "json", cwd=repository)
+
+    assert run.exit_code == 0
+    assert "SHADOWED" not in run.stdout
+    assert run.document["operation"] == "surface-audit"
+
+
+def test_an_abbreviated_option_is_refused_rather_than_silently_accepted(
+    repository: Path,
+) -> None:
+    """argparse would accept --forma=json while the pre-scan that picks the format of a
+    pre-dispatch failure would not, so one invocation could answer in two formats."""
+    run = run_cli("--forma=json", "surface-audit", cwd=repository)
+
+    assert run.exit_code == 2
+    assert "HS-CLI-USAGE" in run.stdout

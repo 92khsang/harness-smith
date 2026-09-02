@@ -14,42 +14,33 @@
 # project is installed with --no-editable, so the environment holds its own copy of the source
 # instead of pointing back at a plugin root that is about to be replaced.
 #
-# The readiness marker is keyed by the same fingerprint and written by rename, so a marker
-# never outlives the environment it describes and a half-finished preparation is never
-# mistaken for a complete one.
+# Two rules keep the failure contract intact, and both have been broken here before:
+#   - fail_environment writes the result document to stdout, so it must never be called from
+#     inside a command substitution, which would capture the document instead of emitting it.
+#   - the message it is given is always a literal from this file. Paths and other external
+#     data go to stderr only, which keeps control characters out of the JSON string and
+#     absolute paths out of a document that is required to be reproducible.
 set -euo pipefail
 
 cli_arguments=("$@")
 
-plugin_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-data_dir=${HARNESS_SMITH_DATA_DIR:-${CLAUDE_PLUGIN_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/harness-smith}}
-environments=$data_dir/venvs
-
-# Everything the environment must reflect. Skills and the launcher itself are excluded: the
-# runtime reads those from the plugin root directly and they never enter the environment.
-FINGERPRINTED_PATHS=(pyproject.toml uv.lock src resources)
-
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256_command=(sha256sum)
-elif command -v shasum >/dev/null 2>&1; then
-  sha256_command=(shasum -a 256)
-else
-  sha256_command=()
-fi
-
+# Mirrors preferred_format in cli.py: the last valid occurrence wins, and each argument is
+# considered independently as both a value and a --format= spelling. A launcher that resolved
+# the format differently from the tool would answer the same invocation two different ways.
 requested_format() {
-  local chosen='text' previous='' argument candidate
-  for argument in ${cli_arguments[@]+"${cli_arguments[@]}"}; do
+  local chosen='text' index=0 count=${#cli_arguments[@]} argument candidate
+  while ((index < count)); do
+    argument=${cli_arguments[index]}
     candidate=''
-    if [[ $previous == '--format' ]]; then
-      candidate=$argument
+    if [[ $argument == '--format' ]] && ((index + 1 < count)); then
+      candidate=${cli_arguments[index + 1]}
     elif [[ $argument == --format=* ]]; then
       candidate=${argument#--format=}
     fi
     if [[ $candidate == 'json' || $candidate == 'text' ]]; then
       chosen=$candidate
     fi
-    previous=$argument
+    index=$((index + 1))
   done
   printf '%s' "$chosen"
 }
@@ -57,11 +48,13 @@ requested_format() {
 # Bootstrap failure is an environment failure, exit 3. Automation asking for JSON gets a
 # well-formed document here too, so no invocation ever receives non-document output.
 fail_environment() {
-  local message=$1 escaped
-  printf 'harness-smith: %s\n' "$message" >&2
+  local message=$1 detail=${2:-}
+  if [[ -n $detail ]]; then
+    printf 'harness-smith: %s: %s\n' "$message" "$detail" >&2
+  else
+    printf 'harness-smith: %s\n' "$message" >&2
+  fi
   if [[ $(requested_format) == 'json' ]]; then
-    escaped=${message//\\/\\\\}
-    escaped=${escaped//\"/\\\"}
     printf '{\n'
     printf '  "schemaVersion": 1,\n'
     printf '  "operation": null,\n'
@@ -72,7 +65,7 @@ fail_environment() {
     printf '      "code": "HS-BOOTSTRAP-FAILED",\n'
     printf '      "severity": "error",\n'
     printf '      "subject": { "kind": "environment", "locator": null },\n'
-    printf '      "message": "%s",\n' "$escaped"
+    printf '      "message": "%s",\n' "$message"
     printf '      "remediation": "Resolve the environment problem reported on stderr, then re-run"\n'
     printf '    }\n'
     printf '  ],\n'
@@ -83,30 +76,66 @@ fail_environment() {
   exit 3
 }
 
-# The digest covers relative paths and file contents only, so the same content installed at two
-# different plugin roots fingerprints identically.
-content_fingerprint() {
-  local listing
-  listing=$(cd "$plugin_root" && find "${FINGERPRINTED_PATHS[@]}" -type f 2>/dev/null |
-    LC_ALL=C sort)
-  if [[ -z $listing ]]; then
-    fail_environment 'the plugin root holds no readable source to fingerprint'
-  fi
-  printf '%s\n' "$listing" |
-    (cd "$plugin_root" && tr '\n' '\0' | xargs -0 "${sha256_command[@]}") |
-    "${sha256_command[@]}" | cut -d' ' -f1
-}
+plugin_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd) ||
+  fail_environment 'the plugin root could not be resolved'
 
-if [[ ${#sha256_command[@]} -eq 0 ]]; then
+default_data_home=${XDG_DATA_HOME:-${HOME:+$HOME/.local/share}}
+data_dir=${HARNESS_SMITH_DATA_DIR:-${CLAUDE_PLUGIN_DATA:-${default_data_home:+$default_data_home/harness-smith}}}
+[[ -n $data_dir ]] ||
+  fail_environment 'no plugin data directory is available; set CLAUDE_PLUGIN_DATA, XDG_DATA_HOME or HOME'
+environments=$data_dir/venvs
+
+# Everything the environment must reflect. Skills and this launcher are excluded: the runtime
+# reads those from the plugin root directly and they never enter the environment.
+FINGERPRINTED_PATHS=(pyproject.toml uv.lock src resources)
+
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_command=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_command=(shasum -a 256)
+else
   fail_environment 'no sha256 tool is available (sha256sum or shasum)'
 fi
 
-fingerprint=$(content_fingerprint)
+# Absent optional paths are not an error; an unreadable tree is. Listing and digesting are
+# separate so that a failure in either is reported rather than swallowed by a pipeline status.
+fingerprint_listing() (
+  local present=() candidate
+  cd "$plugin_root" || return 1
+  for candidate in "${FINGERPRINTED_PATHS[@]}"; do
+    if [[ -e $candidate ]]; then
+      present+=("$candidate")
+    fi
+  done
+  ((${#present[@]})) || return 0
+  find "${present[@]}" -type f | LC_ALL=C sort
+)
+
+# The digest covers relative paths and file contents only, so the same content installed at two
+# different plugin roots fingerprints identically.
+fingerprint_of() (
+  cd "$plugin_root" || return 1
+  printf '%s\n' "$1" | tr '\n' '\0' | xargs -0 "${sha256_command[@]}" |
+    "${sha256_command[@]}" | cut -d' ' -f1
+)
+
+listing=$(fingerprint_listing) ||
+  fail_environment 'the plugin source could not be listed'
+[[ -n $listing ]] ||
+  fail_environment 'the plugin root holds no readable source to fingerprint'
+fingerprint=$(fingerprint_of "$listing") ||
+  fail_environment 'the plugin source could not be digested'
+[[ -n $fingerprint ]] ||
+  fail_environment 'the plugin source produced an empty fingerprint'
+
 venv=$environments/$fingerprint
 marker=$environments/$fingerprint.ready
 
+# -P keeps the caller's working directory off sys.path. This tool is invoked from inside the
+# repository it audits, so without it a repository holding a harness_smith package would run
+# instead of the prepared environment's own copy.
 hand_over() {
-  exec "$venv/bin/python" -m harness_smith ${cli_arguments[@]+"${cli_arguments[@]}"}
+  exec "$venv/bin/python" -P -m harness_smith ${cli_arguments[@]+"${cli_arguments[@]}"}
 }
 
 if [[ -f $marker && -x $venv/bin/python ]]; then
@@ -117,13 +146,22 @@ command -v uv >/dev/null 2>&1 ||
   fail_environment 'uv is not on PATH; it is required to prepare the harness-smith environment'
 
 mkdir -p "$environments" ||
-  fail_environment "the plugin data directory is not writable: $environments"
+  fail_environment 'the plugin data directory is not writable' "$environments"
+
+# The marker goes first, so an interrupted preparation leaves no readiness claim behind. A
+# marker that outlived a half-finished sync would assert an environment that cannot import the
+# package, and nothing would ever re-prepare it.
+rm -f "$marker" ||
+  fail_environment 'the stale readiness marker could not be removed' "$marker"
 
 UV_PROJECT_ENVIRONMENT=$venv uv sync --frozen --no-dev --no-editable --project "$plugin_root" >&2 ||
   fail_environment 'environment preparation failed: uv sync --frozen --no-dev --no-editable'
 
-printf '%s\n' "$fingerprint" >"$marker.partial" &&
-  mv -f "$marker.partial" "$marker" ||
-  fail_environment "the readiness marker could not be written: $marker"
+# A per-process temporary name, because concurrent launchers at the same fingerprint would
+# otherwise race on one path and every loser would report a failure for work that succeeded.
+marker_temporary=$marker.$$.partial
+printf '%s\n' "$fingerprint" >"$marker_temporary" &&
+  mv -f "$marker_temporary" "$marker" ||
+  fail_environment 'the readiness marker could not be written' "$marker"
 
 hand_over
