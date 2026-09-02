@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 
 from harness_smith.cli import preferred_format
 from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
-from tests.support import BOOTSTRAP_PATH, validate_document
+from tests.support import BOOTSTRAP_PATH, LOADER_PATH, PLUGIN_ROOT, validate_document
 
 # A stub ``uv`` that builds the environment the launcher asked for and records the plugin root
 # it was pointed at, so a test can tell which version's code an environment holds.
@@ -34,8 +35,15 @@ done
 marker=$(sed -n 's/^VERSION = "\\(.*\\)"$/\\1/p' "$project/src/harness_smith/__init__.py")
 mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"
 printf 'version_info = 3.13\\n' > "$UV_PROJECT_ENVIRONMENT/pyvenv.cfg"
+: > "$UV_PROJECT_ENVIRONMENT/installed"
+# Stands in for the loader contract: an environment that cannot import the tool exits 97
+# before anything reaches stdout.
 cat > "$UV_PROJECT_ENVIRONMENT/bin/python" <<INNER
 #!/usr/bin/env bash
+if [[ ! -f "$UV_PROJECT_ENVIRONMENT/installed" ]]; then
+  printf 'cannot load the tool\\n' >&2
+  exit 97
+fi
 printf 'stub-python[$marker] %s\\n' "\\$*"
 INNER
 chmod +x "$UV_PROJECT_ENVIRONMENT/bin/python"
@@ -77,6 +85,7 @@ class PluginData:
         root = self.root / "cache" / marker
         (root / "bin").mkdir(parents=True)
         (root / "bin" / "harness-smith").symlink_to(BOOTSTRAP_PATH)
+        (root / "bin" / "loader.py").symlink_to(LOADER_PATH)
         (root / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
         (root / "uv.lock").write_text(lock, encoding="utf-8")
         package = root / "src" / "harness_smith"
@@ -127,7 +136,8 @@ def test_the_first_operation_prepares_the_environment_and_hands_over(
 
     assert run.returncode == 0, run.stderr
     assert len(plugin_data.uv_invocations) == 1
-    assert run.stdout == "stub-python[A] -P -m harness_smith surface-audit --format json\n"
+    assert run.stdout.startswith("stub-python[A] -I -X utf8 ")
+    assert run.stdout.rstrip().endswith("bin/loader.py surface-audit --format json")
     assert plugin_data.ready_environments
 
 
@@ -150,7 +160,7 @@ def test_the_working_directory_is_kept_off_the_interpreter_path(
 
     run = plugin_data.run(launcher, "surface-audit")
 
-    assert run.stdout.startswith("stub-python[A] -P -m harness_smith")
+    assert run.stdout.startswith("stub-python[A] -I -X utf8 ")
 
 
 def test_the_environment_holds_its_own_copy_of_the_source(plugin_data: PluginData) -> None:
@@ -161,6 +171,7 @@ def test_the_environment_holds_its_own_copy_of_the_source(plugin_data: PluginDat
     plugin_data.run(launcher, "surface-audit")
 
     assert "--no-editable" in plugin_data.uv_invocations[0]
+    assert "--locked" in plugin_data.uv_invocations[0]
 
 
 def test_an_update_that_changes_only_source_runs_the_new_code(plugin_data: PluginData) -> None:
@@ -234,7 +245,8 @@ def test_preparation_progress_never_reaches_stdout(plugin_data: PluginData) -> N
 
     run = plugin_data.run(launcher, "surface-audit", "--format", "json")
 
-    assert run.stdout == "stub-python[A] -P -m harness_smith surface-audit --format json\n"
+    assert run.stdout.startswith("stub-python[A] -I -X utf8 ")
+    assert run.stdout.rstrip().endswith("bin/loader.py surface-audit --format json")
     assert "preparing the environment" in run.stderr
 
 
@@ -451,3 +463,88 @@ def test_the_launcher_resolves_the_format_exactly_as_the_parser_would(
     assert emitted_a_document == (preferred_format(list(arguments)) == "json")
     if emitted_a_document:
         validate_document(json.loads(run.stdout))
+
+
+def damage(plugin_data: PluginData) -> None:
+    """Remove what makes the environment able to load the tool, leaving its readiness claim."""
+    for environment in (plugin_data.data_dir / "venvs").iterdir():
+        if environment.is_dir():
+            (environment / "installed").unlink()
+
+
+def test_a_damaged_environment_is_prepared_again_and_succeeds(plugin_data: PluginData) -> None:
+    """The marker records that a sync finished, not that the environment still works."""
+    launcher = plugin_data.install("A")
+    plugin_data.run(launcher, "surface-audit")
+    damage(plugin_data)
+
+    run = plugin_data.run(launcher, "surface-audit", "--format", "json")
+
+    assert run.returncode == 0
+    assert run.stdout.startswith("stub-python[A] -I -X utf8 ")
+    assert len(plugin_data.uv_invocations) == 2
+    assert "--reinstall" in plugin_data.uv_invocations[1]
+
+
+def test_a_damaged_environment_that_cannot_be_repaired_is_one_document(tmp_path: Path) -> None:
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    plugin_data.run(launcher, "surface-audit")
+    damage(plugin_data)
+    (Path(plugin_data.path.split(":")[0]) / "uv").unlink()
+
+    run = plugin_data.run(launcher, "surface-audit", "--format", "json")
+
+    assert run.returncode == 3
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert [entry["code"] for entry in document["diagnostics"]] == ["HS-BOOTSTRAP-FAILED"]
+    assert "Traceback" not in run.stderr
+
+
+def test_a_damaged_environment_never_ends_in_a_bare_import_error(tmp_path: Path) -> None:
+    """Before the loader existed this path exited 1 -- the code reserved for a policy
+    violation -- with an empty stdout and ModuleNotFoundError on stderr."""
+    plugin_data = PluginData(tmp_path)
+    launcher = plugin_data.install("A")
+    plugin_data.run(launcher, "surface-audit")
+    damage(plugin_data)
+    (Path(plugin_data.path.split(":")[0]) / "uv").unlink()
+
+    run = plugin_data.run(launcher, "surface-audit", "--format", "json")
+
+    assert run.returncode != 1
+    assert run.stdout.strip() != ""
+    assert "ModuleNotFoundError" not in run.stdout
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs the real uv to check the lock")
+def test_a_lock_that_no_longer_describes_the_project_is_refused(tmp_path: Path) -> None:
+    """--frozen installed the stale lock and marked the environment ready while a declared
+    dependency was missing from it."""
+    root = tmp_path / "plugin"
+    shutil.copytree(
+        PLUGIN_ROOT, root, ignore=shutil.ignore_patterns(".venv", "__pycache__", ".*_cache")
+    )
+    pyproject = root / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text(encoding="utf-8").replace(
+            "dependencies = []", 'dependencies = ["ruamel-yaml>=0.18"]'
+        ),
+        encoding="utf-8",
+    )
+    data_dir = tmp_path / "plugin-data"
+
+    run = subprocess.run(
+        [str(root / "bin" / "harness-smith"), "surface-audit", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "HARNESS_SMITH_DATA_DIR": str(data_dir)},
+    )
+
+    assert run.returncode == 3
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert [entry["code"] for entry in document["diagnostics"]] == ["HS-BOOTSTRAP-FAILED"]
+    assert list((data_dir / "venvs").glob("*.ready")) == []

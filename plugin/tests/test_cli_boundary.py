@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from tests.support import make_repository, run_cli, snapshot_tree, sole_json_document
+from tests.support import (
+    LOADER_PATH,
+    make_repository,
+    run_cli,
+    snapshot_tree,
+    sole_json_document,
+)
+
+sys.path.insert(0, str(LOADER_PATH.parent))
+from loader import LOAD_FAILURE
 
 
 @pytest.fixture
@@ -208,6 +219,68 @@ def test_a_repository_holding_its_own_harness_smith_package_does_not_shadow_the_
     assert run.exit_code == 0
     assert "SHADOWED" not in run.stdout
     assert run.document["operation"] == "surface-audit"
+
+
+def test_a_pythonpath_entry_cannot_supply_the_package_the_tool_is(
+    repository: Path, tmp_path: Path
+) -> None:
+    """-P keeps the working directory off sys.path but leaves PYTHONPATH free to inject a
+    package; -I is what actually closes it."""
+    injected = tmp_path / "injected"
+    (injected / "harness_smith").mkdir(parents=True)
+    (injected / "harness_smith" / "__init__.py").write_text("", encoding="utf-8")
+    (injected / "harness_smith" / "cli.py").write_text(
+        'def main(argv=None):\n    print("PYTHONPATH_SHADOW")\n    return 0\n', encoding="utf-8"
+    )
+
+    run = run_cli(
+        "surface-audit",
+        "--format",
+        "json",
+        cwd=repository,
+        environment={"PYTHONPATH": str(injected)},
+    )
+
+    assert run.exit_code == 0
+    assert "PYTHONPATH_SHADOW" not in run.stdout
+    assert run.document["operation"] == "surface-audit"
+
+
+@pytest.mark.parametrize(
+    "variable", ["PYTHONHOME", "PYTHONINSPECT", "PYTHONSTARTUP", "PYTHONWARNINGS"]
+)
+def test_no_python_environment_variable_changes_the_execution_contract(
+    repository: Path, variable: str
+) -> None:
+    baseline = run_cli("surface-audit", "--format", "json", cwd=repository)
+
+    run = run_cli(
+        "surface-audit", "--format", "json", cwd=repository, environment={variable: "/nonexistent"}
+    )
+
+    assert run.exit_code == baseline.exit_code == 0
+    assert run.stdout == baseline.stdout
+
+
+def test_the_loader_reports_an_environment_that_cannot_import_the_tool(tmp_path: Path) -> None:
+    """The launcher recovers a damaged environment by recognising this status, so the loader
+    has to produce it rather than a traceback."""
+    bare = tmp_path / "bare-environment"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(bare)], check=True, capture_output=True
+    )
+
+    completed = subprocess.run(
+        [str(bare / "bin" / "python"), "-I", "-X", "utf8", str(LOADER_PATH), "surface-audit"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == LOAD_FAILURE
+    assert completed.stdout == ""
+    assert "cannot load the tool" in completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 def test_an_abbreviated_option_is_refused_rather_than_silently_accepted(

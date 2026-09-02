@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -17,6 +18,7 @@ import jsonschema
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = PLUGIN_ROOT / "resources" / "schemas" / "operation-result.schema.json"
 BOOTSTRAP_PATH = PLUGIN_ROOT / "bin" / "harness-smith"
+LOADER_PATH = PLUGIN_ROOT / "bin" / "loader.py"
 
 
 @dataclass(frozen=True)
@@ -39,18 +41,19 @@ class CliRun:
         return codes
 
 
-def run_cli(*arguments: str, cwd: Path) -> CliRun:
+def run_cli(*arguments: str, cwd: Path, environment: Mapping[str, str] | None = None) -> CliRun:
     """Run the tool the way automation does: as a subprocess, observed at its boundary.
 
-    ``-P`` mirrors the launcher: the working directory is the repository under audit and must
-    not reach ``sys.path``.
+    The interpreter flags and the loader mirror the launcher exactly. ``-I`` is the point: the
+    working directory is the repository under audit, and neither it nor any ``PYTHON*``
+    variable may reach ``sys.path``.
     """
     completed = subprocess.run(
-        [sys.executable, "-P", "-m", "harness_smith", *arguments],
+        [sys.executable, "-I", "-X", "utf8", str(LOADER_PATH), *arguments],
         cwd=cwd,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        env={**os.environ, **(environment or {})},
         check=False,
     )
     return CliRun(completed.returncode, completed.stdout, completed.stderr)

@@ -131,37 +131,76 @@ fingerprint=$(fingerprint_of "$listing") ||
 venv=$environments/$fingerprint
 marker=$environments/$fingerprint.ready
 
-# -P keeps the caller's working directory off sys.path. This tool is invoked from inside the
-# repository it audits, so without it a repository holding a harness_smith package would run
-# instead of the prepared environment's own copy.
-hand_over() {
-  exec "$venv/bin/python" -P -m harness_smith ${cli_arguments[@]+"${cli_arguments[@]}"}
+# -I keeps the caller's working directory, PYTHONPATH, PYTHONHOME and the user site directory
+# off sys.path. This tool is invoked from inside the repository it audits, and -P alone would
+# leave PYTHONPATH free to supply the package the tool is. -X utf8 is a command-line flag
+# rather than an environment variable for the same reason: under -I the environment cannot be
+# consulted, and the document must not depend on the locale of the machine that produced it.
+#
+# LOAD_FAILURE is the status the loader reserves for an environment that cannot import the
+# tool. Nothing has reached stdout when it is returned, so the run can still be recovered.
+LOAD_FAILURE=97
+
+loader=$plugin_root/bin/loader.py
+[[ -f $loader ]] ||
+  fail_environment 'the launcher cannot find its loader'
+
+run_tool() {
+  "$venv/bin/python" -I -X utf8 "$loader" ${cli_arguments[@]+"${cli_arguments[@]}"}
 }
 
+# The marker records that a sync finished, which is not the same as the environment still
+# being able to load the tool. Anything that damaged it since -- an interrupted upgrade, a
+# half-removed site-packages -- is recovered by preparing again rather than reaching the
+# caller as a raw import error.
+# --locked rather than --frozen: --frozen installs what the lock says without checking that it
+# still describes pyproject.toml, so a stale lock yields an environment missing a declared
+# dependency and a readiness marker asserting it is fine. The plugin root and its lock are
+# release inputs, so a mismatch is a packaging failure to refuse, not one to repair here.
+#
+# The marker is removed first, so an interrupted preparation leaves no readiness claim behind.
+# A per-process temporary name writes it back, because concurrent launchers at one fingerprint
+# would otherwise race on a single path and every loser would report a failure for work that
+# succeeded.
+prepare_environment() {
+  local reinstall=("$@") marker_temporary
+
+  command -v uv >/dev/null 2>&1 ||
+    fail_environment 'uv is not on PATH; it is required to prepare the harness-smith environment'
+
+  mkdir -p "$environments" ||
+    fail_environment 'the plugin data directory is not writable' "$environments"
+
+  rm -f "$marker" ||
+    fail_environment 'the stale readiness marker could not be removed' "$marker"
+
+  UV_PROJECT_ENVIRONMENT=$venv uv sync --locked --no-dev --no-editable \
+    ${reinstall[@]+"${reinstall[@]}"} --project "$plugin_root" >&2 ||
+    fail_environment 'environment preparation failed: uv sync --locked --no-dev --no-editable'
+
+  marker_temporary=$marker.$$.partial
+  printf '%s\n' "$fingerprint" >"$marker_temporary" &&
+    mv -f "$marker_temporary" "$marker" ||
+    fail_environment 'the readiness marker could not be written' "$marker"
+}
+
+status=0
 if [[ -f $marker && -x $venv/bin/python ]]; then
-  hand_over
+  run_tool || status=$?
+  if ((status != LOAD_FAILURE)); then
+    exit "$status"
+  fi
+  # uv trusts its own install metadata, which a damaged environment can retain while the
+  # package itself is gone, so recovery has to force the reinstall rather than ask for a sync
+  # that would find nothing to do.
+  prepare_environment --reinstall
+else
+  prepare_environment
 fi
 
-command -v uv >/dev/null 2>&1 ||
-  fail_environment 'uv is not on PATH; it is required to prepare the harness-smith environment'
-
-mkdir -p "$environments" ||
-  fail_environment 'the plugin data directory is not writable' "$environments"
-
-# The marker goes first, so an interrupted preparation leaves no readiness claim behind. A
-# marker that outlived a half-finished sync would assert an environment that cannot import the
-# package, and nothing would ever re-prepare it.
-rm -f "$marker" ||
-  fail_environment 'the stale readiness marker could not be removed' "$marker"
-
-UV_PROJECT_ENVIRONMENT=$venv uv sync --frozen --no-dev --no-editable --project "$plugin_root" >&2 ||
-  fail_environment 'environment preparation failed: uv sync --frozen --no-dev --no-editable'
-
-# A per-process temporary name, because concurrent launchers at the same fingerprint would
-# otherwise race on one path and every loser would report a failure for work that succeeded.
-marker_temporary=$marker.$$.partial
-printf '%s\n' "$fingerprint" >"$marker_temporary" &&
-  mv -f "$marker_temporary" "$marker" ||
-  fail_environment 'the readiness marker could not be written' "$marker"
-
-hand_over
+status=0
+run_tool || status=$?
+if ((status == LOAD_FAILURE)); then
+  fail_environment 'the prepared environment cannot load the tool'
+fi
+exit "$status"
