@@ -9,6 +9,16 @@ from typing import Any
 import jsonschema
 import pytest
 
+from harness_smith.artifacts import (
+    Activation,
+    ActivationCause,
+    ArtifactType,
+    CapabilityValue,
+    ContainerFormat,
+    Provenance,
+    Representation,
+    Scope,
+)
 from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
 from harness_smith.operations import DECLARED_OPERATIONS
 from harness_smith.result import ChangeAction, PatchFormat
@@ -39,6 +49,35 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
         ("$defs/subject/properties/kind/enum", [member.value for member in SubjectKind]),
         ("$defs/change/properties/action/enum", [member.value for member in ChangeAction]),
         ("$defs/patch/properties/format/enum", [member.value for member in PatchFormat]),
+        ("$defs/capabilityValue/enum", [member.value for member in CapabilityValue]),
+        (
+            "$defs/artifactContainer/properties/format/enum",
+            [member.value for member in ContainerFormat],
+        ),
+        (
+            "$defs/inventoriedArtifact/properties/type/enum",
+            [member.value for member in ArtifactType],
+        ),
+        (
+            "$defs/inventoriedArtifact/properties/scope/enum",
+            [member.value for member in Scope],
+        ),
+        (
+            "$defs/inventoriedArtifact/properties/representation/enum",
+            [member.value for member in Representation],
+        ),
+        (
+            "$defs/inventoriedArtifact/properties/provenance/enum",
+            [member.value for member in Provenance],
+        ),
+        (
+            "$defs/inventoriedArtifact/properties/activation/enum",
+            [member.value for member in Activation],
+        ),
+        (
+            "$defs/inventoriedArtifact/properties/activationCause/oneOf/0/enum",
+            [member.value for member in ActivationCause],
+        ),
     ],
 )
 def test_schema_enums_match_the_implementation(pointer: str, expected: list[str]) -> None:
@@ -114,6 +153,7 @@ POPULATED_SURFACE_AUDIT: dict[str, Any] = {
                 "locator": "CLAUDE.md",
                 "type": "entry-point",
                 "scope": "repository",
+                "representation": "file",
                 "provenance": "authored",
                 "managementAuthority": "local",
                 "activation": "active",

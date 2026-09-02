@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Harness governance toolchain: discovers, classifies, and governs agent harness artifacts."
 requires-python = ">=3.12"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["ruamel.yaml>=0.19"]
 
 [project.scripts]
 harness-smith = "harness_smith.cli:main"

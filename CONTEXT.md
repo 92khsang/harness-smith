@@ -71,6 +71,10 @@ _Avoid_: file list, catalogue
 **Scope**:
 Which Surface an Artifact belongs to.
 
+**Representation**:
+How an Artifact is written down, where the runtime accepts a type in more than one form. A command-form skill is a Skill in its legacy-command representation, not a type of its own.
+_Avoid_: format, kind, variant
+
 **Provenance**:
 Where an Artifact's content came from and how it got here — authored, generated, imported, or adopted. Provenance is history and never implies who may write it now.
 _Avoid_: origin, source (ambiguous with a relation's source)

@@ -25,8 +25,8 @@ Drop `--format json` for a short human-readable summary instead.
 With `--format json`, stdout carries exactly one `OperationResult` document and nothing else;
 progress and errors go to stderr. `data` holds the three parts of the Discovery Report:
 
-- `artifacts` - the discovered artifacts, each with its type, scope, provenance, management
-  authority, activation, and the governance sets it belongs to.
+- `artifacts` - the discovered artifacts, each with its type, scope, representation,
+  provenance, management authority, activation, and the governance sets it belongs to.
 - `containers` - files that hold artifacts addressed by pointer rather than by path, and what
   each one holds.
 - `observations` - runtime components that have no artifact type, with the adapter's capability

@@ -527,6 +527,7 @@
         "locator",
         "type",
         "scope",
+        "representation",
         "provenance",
         "managementAuthority",
         "activation",
@@ -556,6 +557,13 @@
             "plugin",
             "user-global",
             "external"
+          ]
+        },
+        "representation": {
+          "enum": [
+            "file",
+            "directory",
+            "legacy-command"
           ]
         },
         "provenance": {

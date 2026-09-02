@@ -69,6 +69,15 @@ def make_repository(path: Path) -> Path:
     return path
 
 
+def write_tree(root: Path, files: Mapping[str, str]) -> Path:
+    """Create every path in ``files`` under ``root``, parents included."""
+    for relative, content in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return root
+
+
 def snapshot_tree(root: Path) -> dict[str, str]:
     """Digest every path under ``root`` except version-control internals."""
     entries: dict[str, str] = {}

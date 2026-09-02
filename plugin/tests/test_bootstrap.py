@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -528,8 +529,12 @@ def test_a_lock_that_no_longer_describes_the_project_is_refused(tmp_path: Path) 
     )
     pyproject = root / "pyproject.toml"
     pyproject.write_text(
-        pyproject.read_text(encoding="utf-8").replace(
-            "dependencies = []", 'dependencies = ["ruamel-yaml>=0.18"]'
+        re.sub(
+            r"^dependencies = .*$",
+            'dependencies = ["tomli-w>=1.0"]',
+            pyproject.read_text(encoding="utf-8"),
+            count=1,
+            flags=re.MULTILINE,
         ),
         encoding="utf-8",
     )

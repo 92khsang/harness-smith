@@ -1,0 +1,132 @@
+"""surface-audit over fixture repository trees, observed at the command line.
+
+The observation is the exit code and the canonical JSON document, which is what automation
+consumes. Every document a run emits is validated against the result schema.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.support import CliRun, make_repository, run_cli, write_tree
+
+POPULATED: Mapping[str, str] = {
+    "CLAUDE.md": "# entry point\n",
+    ".claude/rules/style.md": "# style\n",
+    ".claude/rules/python/typing.md": '---\npaths:\n  - "**/*.py"\n---\n\n# typing\n',
+    ".claude/skills/audit/SKILL.md": "---\nname: audit\n---\n\n# audit\n",
+    ".claude/commands/report.md": "Write the report.\n",
+    ".claude/agents/reviewer.md": "---\nname: reviewer\n---\n\n# reviewer\n",
+    ".claude/settings.json": '{"hooks": {}}\n',
+    "README.md": "# not part of the harness\n",
+}
+
+
+@pytest.fixture
+def repository(tmp_path: Path) -> Path:
+    return make_repository(tmp_path / "repository")
+
+
+def audit(repository: Path, files: Mapping[str, str]) -> CliRun:
+    write_tree(repository, files)
+    return run_cli("surface-audit", "--format", "json", cwd=repository)
+
+
+def artifacts(run: CliRun) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = run.document["data"]["artifacts"]
+    return entries
+
+
+def test_a_populated_repository_reports_every_runtime_native_artifact(
+    repository: Path,
+) -> None:
+    run = audit(repository, POPULATED)
+
+    assert run.exit_code == 0
+    assert [(entry["locator"], entry["type"]) for entry in artifacts(run)] == [
+        (".claude/agents/reviewer.md", "agent"),
+        (".claude/commands/report.md", "skill"),
+        (".claude/rules/python/typing.md", "rule"),
+        (".claude/rules/style.md", "rule"),
+        (".claude/skills/audit/SKILL.md", "skill"),
+        ("CLAUDE.md", "entry-point"),
+    ]
+
+
+def test_every_reported_artifact_carries_its_locator_type_and_scope(repository: Path) -> None:
+    run = audit(repository, POPULATED)
+
+    for entry in artifacts(run):
+        assert entry["locator"]
+        assert entry["type"]
+        assert entry["scope"] == "repository"
+
+
+def test_the_settings_file_is_reported_as_a_container(repository: Path) -> None:
+    run = audit(repository, POPULATED)
+
+    assert run.document["data"]["containers"] == [
+        {"locator": ".claude/settings.json", "format": "json", "holds": []}
+    ]
+
+
+def test_a_command_form_skill_carries_its_legacy_representation(repository: Path) -> None:
+    run = audit(repository, POPULATED)
+
+    representations = {entry["locator"]: entry["representation"] for entry in artifacts(run)}
+
+    assert representations[".claude/commands/report.md"] == "legacy-command"
+    assert representations[".claude/skills/audit/SKILL.md"] == "directory"
+    assert representations["CLAUDE.md"] == "file"
+
+
+def test_two_project_entry_points_is_a_violation_that_still_reports_the_inventory(
+    repository: Path,
+) -> None:
+    run = audit(repository, {"CLAUDE.md": "# one\n", ".claude/CLAUDE.md": "# two\n"})
+
+    assert run.exit_code == 1
+    assert run.document["status"] == "violations"
+    assert run.diagnostic_codes == ["HS-ENTRYPOINT-DUPLICATE"]
+    assert len(artifacts(run)) == 2
+
+
+def test_unparseable_rule_frontmatter_is_a_violation(repository: Path) -> None:
+    run = audit(repository, {".claude/rules/broken.md": "---\npaths: [1, 2\n---\n"})
+
+    assert run.exit_code == 1
+    assert run.diagnostic_codes == ["HS-RULE-FRONTMATTER-INVALID"]
+    assert run.document["diagnostics"][0]["remediation"] == "Fix the YAML"
+
+
+def test_a_shadowed_command_is_a_warning_that_does_not_fail_the_run(repository: Path) -> None:
+    run = audit(
+        repository,
+        {".claude/skills/audit/SKILL.md": "# audit\n", ".claude/commands/audit.md": "audit\n"},
+    )
+
+    assert run.exit_code == 0
+    assert run.document["status"] == "ok"
+    assert run.diagnostic_codes == ["HS-SKILL-NAME-SHADOWED"]
+
+
+def test_a_populated_repository_reads_the_same_way_twice(repository: Path) -> None:
+    first = audit(repository, POPULATED)
+    second = run_cli("surface-audit", "--format", "json", cwd=repository)
+
+    assert first.stdout == second.stdout
+
+
+def test_the_text_format_names_each_discovered_artifact(repository: Path) -> None:
+    write_tree(repository, POPULATED)
+
+    run = run_cli("surface-audit", cwd=repository)
+
+    assert run.exit_code == 0
+    assert "artifacts: 6" in run.stdout
+    assert "entry-point" in run.stdout
+    assert "CLAUDE.md" in run.stdout
