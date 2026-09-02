@@ -1,0 +1,20 @@
+# Local direnv configuration
+.envrc
+
+# Scratch working documents, not part of the plugin
+temp/
+
+# Machine-local agent instructions, never published
+CLAUDE.local.md
+
+# Machine-local project settings. Everything else under .claude/ is authored
+# repository harness surface and MUST stay tracked: this repository is a
+# consumer of the plugin it ships, so its own harness artifacts are the
+# worked example.
+.claude/settings.local.json
+
+# Local-markdown scratch space used by some agent skills
+.scratch/
+
+# OS cruft
+.DS_Store
