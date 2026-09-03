@@ -700,6 +700,7 @@
       "required": [
         "locator",
         "format",
+        "scope",
         "holds"
       ],
       "properties": {
@@ -710,6 +711,14 @@
           "enum": [
             "json",
             "yaml-frontmatter"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "repository",
+            "plugin",
+            "user-global",
+            "external"
           ]
         },
         "holds": {

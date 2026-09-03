@@ -9,9 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 from harness_smith.artifacts import (
+    ArtifactContainer,
     ArtifactType,
     CapabilityPolicy,
     CapabilityValue,
+    ContainerFormat,
     DiscoveryReport,
     InventoriedArtifact,
     Representation,
@@ -69,3 +71,16 @@ def test_artifacts_sharing_a_locator_are_ordered_by_scope_then_type() -> None:
     ordered = [(entry["scope"], entry["type"]) for entry in section(report, "artifacts")]
 
     assert ordered == [("plugin", "agent"), ("plugin", "skill"), ("repository", "rule")]
+
+
+def test_containers_sharing_a_locator_are_ordered_by_scope() -> None:
+    report = DiscoveryReport(
+        containers=(
+            ArtifactContainer(SHARED, ContainerFormat.JSON, Scope.USER_GLOBAL),
+            ArtifactContainer(SHARED, ContainerFormat.JSON, Scope.PLUGIN),
+        )
+    )
+
+    ordered = [entry["scope"] for entry in section(report, "containers")]
+
+    assert ordered == ["plugin", "user-global"]

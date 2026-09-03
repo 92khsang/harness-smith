@@ -114,6 +114,7 @@ def test_the_settings_file_is_a_container_holding_the_hooks_it_declares(
         {
             "locator": ".claude/settings.json",
             "format": "json",
+            "scope": "repository",
             "holds": [".claude/settings.json#/hooks/PostToolUse/0"],
         }
     ]
@@ -213,7 +214,7 @@ def test_a_settings_file_with_no_hooks_block_declares_none(repository: Path) -> 
     assert run.exit_code == 0
     assert artifacts(run) == []
     assert run.document["data"]["containers"] == [
-        {"locator": ".claude/settings.json", "format": "json", "holds": []}
+        {"locator": ".claude/settings.json", "format": "json", "scope": "repository", "holds": []}
     ]
 
 

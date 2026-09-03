@@ -69,6 +69,10 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
             [member.value for member in Scope],
         ),
         (
+            "$defs/artifactContainer/properties/scope/enum",
+            [member.value for member in Scope],
+        ),
+        (
             "$defs/inventoriedArtifact/properties/representation/enum",
             [member.value for member in Representation],
         ),
@@ -174,6 +178,7 @@ POPULATED_SURFACE_AUDIT: dict[str, Any] = {
             {
                 "locator": ".claude/settings.json",
                 "format": "json",
+                "scope": "repository",
                 "holds": [".claude/settings.json#/hooks/PreToolUse/0"],
             }
         ],

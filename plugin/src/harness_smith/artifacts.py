@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from operator import attrgetter
 
 from harness_smith.diagnostics import Diagnostic
 
@@ -225,16 +224,22 @@ class InventoriedArtifact:
 
 @dataclass(frozen=True)
 class ArtifactContainer:
-    """A file holding zero or more Artifacts addressed by pointer rather than by path."""
+    """A file holding zero or more Artifacts addressed by pointer rather than by path.
+
+    A container carries the Scope it was found in, so the same containing file at the same
+    Locator in two Scopes is two entries rather than one.
+    """
 
     locator: str
     format: ContainerFormat
+    scope: Scope
     holds: tuple[str, ...] = ()
 
     def as_document(self) -> dict[str, object]:
         return {
             "locator": self.locator,
             "format": self.format.value,
+            "scope": self.scope.value,
             "holds": sorted(self.holds),
         }
 
@@ -283,7 +288,8 @@ class DiscoveryReport:
                 for entry in sorted(self.artifacts, key=lambda e: (e.scope, e.locator, e.type))
             ],
             "containers": [
-                entry.as_document() for entry in sorted(self.containers, key=attrgetter("locator"))
+                entry.as_document()
+                for entry in sorted(self.containers, key=lambda e: (e.scope, e.locator))
             ],
             "observations": [
                 entry.as_document()
@@ -307,6 +313,7 @@ class HookDeclaration:
 
     locator: str
     declaration_digest: str
+    scope: Scope
 
 
 @dataclass(frozen=True)
