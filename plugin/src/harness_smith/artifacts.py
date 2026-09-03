@@ -52,11 +52,12 @@ class ArtifactType(StrEnum):
 class Scope(StrEnum):
     """Which Surface an Artifact belongs to.
 
-    A Surface is an identity and a reach, not a set of permissions. Two Surfaces that permit
-    the same things are still two Surfaces: an organisation's policy reaches every machine it
-    is deployed to and nobody here may change it, while a user's own global configuration
-    reaches only this machine and is the user's to change. Collapsing them because their
-    Capability Policy rows agree would lose the difference.
+    A Surface is an identity and a precedence boundary, not a set of permissions and not a
+    population. ``managed-policy`` is the administrator-controlled policy tier in effect for
+    the current runtime or device; how many machines or users an organisation deployed it to
+    is not part of that identity. Two Surfaces that permit the same things are still two
+    Surfaces, so collapsing ``managed-policy`` into ``user-global`` because their Capability
+    Policy rows agree would lose who the tier answers to and where it sits in precedence.
     """
 
     REPOSITORY = "repository"

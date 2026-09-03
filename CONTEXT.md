@@ -41,7 +41,7 @@ An Artifact that mechanically decides whether the current state satisfies a Rule
 _Avoid_: check, gate, validation (too broad)
 
 **Surface**:
-A boundary that groups artifacts by where they live: repository, plugin, user-global, external, or managed-policy. A Surface is an identity and a reach, not a set of permissions, so two Surfaces whose Capability Policy rows agree are still two Surfaces.
+A boundary that groups artifacts by where they live: repository, plugin, user-global, external, or managed-policy. A Surface is an identity and a precedence boundary, not a set of permissions and not a population, so two Surfaces whose Capability Policy rows agree are still two Surfaces. Managed-policy is the administrator-controlled policy tier in effect for the current runtime or device; how widely an organisation deployed it is not part of the identity.
 _Avoid_: container, area, layer
 
 **Artifact Container**:
