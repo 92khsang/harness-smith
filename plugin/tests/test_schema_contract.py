@@ -289,7 +289,7 @@ def test_authority_applies_where_mutation_is_conceivable(scope: str) -> None:
         validate_document(with_artifact(scope=scope, managementAuthority=None))
 
 
-@pytest.mark.parametrize("scope", ["user-global", "external"])
+@pytest.mark.parametrize("scope", ["user-global", "external", "managed-policy"])
 def test_authority_does_not_apply_outside_repository_and_plugin_scope(scope: str) -> None:
     """Outside them there is no authority to hold, which is null rather than a fifth value."""
     validate_document(with_artifact(scope=scope, managementAuthority=None))

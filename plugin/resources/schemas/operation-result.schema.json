@@ -579,7 +579,8 @@
             "repository",
             "plugin",
             "user-global",
-            "external"
+            "external",
+            "managed-policy"
           ]
         },
         "representation": {
@@ -676,7 +677,8 @@
               "scope": {
                 "enum": [
                   "user-global",
-                  "external"
+                  "external",
+                  "managed-policy"
                 ]
               }
             },
@@ -718,7 +720,8 @@
             "repository",
             "plugin",
             "user-global",
-            "external"
+            "external",
+            "managed-policy"
           ]
         },
         "holds": {
@@ -750,7 +753,8 @@
             "repository",
             "plugin",
             "user-global",
-            "external"
+            "external",
+            "managed-policy"
           ]
         },
         "capabilities": {

@@ -41,7 +41,7 @@ An Artifact that mechanically decides whether the current state satisfies a Rule
 _Avoid_: check, gate, validation (too broad)
 
 **Surface**:
-A boundary that groups artifacts by where they live: repository, plugin, user-global, or external.
+A boundary that groups artifacts by where they live: repository, plugin, user-global, external, or managed-policy. A Surface is an identity and a reach, not a set of permissions, so two Surfaces whose Capability Policy rows agree are still two Surfaces.
 _Avoid_: container, area, layer
 
 **Artifact Container**:

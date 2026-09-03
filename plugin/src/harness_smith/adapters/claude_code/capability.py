@@ -22,14 +22,17 @@ _MANAGED = CapabilityValue.MANAGED
 _OBSERVED_ONLY = CapabilityValue.OBSERVED_ONLY
 _UNSUPPORTED = CapabilityValue.UNSUPPORTED
 
-# `plugin` is this repository's own plugin product source; `external` is an installed
-# third-party plugin. `observed-only` on structural check means findings are reported and never
-# contribute to a pass-or-fail verdict.
+# `plugin` is this repository's own plugin product source, `external` is an installed
+# third-party plugin, and `managed-policy` is the organisation's policy. `observed-only` on
+# structural check means findings are reported and never contribute to a pass-or-fail verdict.
+# The last three rows agree, which is a fact about what may be done and not a reason to treat
+# their Surfaces as one.
 SURFACE_CAPABILITY: Mapping[Scope, CapabilityPolicy] = {
     Scope.REPOSITORY: CapabilityPolicy(_MANAGED, _MANAGED, _MANAGED, _MANAGED),
     Scope.PLUGIN: CapabilityPolicy(_MANAGED, _MANAGED, _MANAGED, _MANAGED),
     Scope.EXTERNAL: CapabilityPolicy(_MANAGED, _OBSERVED_ONLY, _OBSERVED_ONLY, _UNSUPPORTED),
     Scope.USER_GLOBAL: CapabilityPolicy(_MANAGED, _OBSERVED_ONLY, _OBSERVED_ONLY, _UNSUPPORTED),
+    Scope.MANAGED_POLICY: CapabilityPolicy(_MANAGED, _OBSERVED_ONLY, _OBSERVED_ONLY, _UNSUPPORTED),
 }
 
 
