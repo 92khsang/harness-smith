@@ -615,3 +615,38 @@ def test_a_repeated_property_name_outside_the_hooks_member_is_left_alone(
 
     assert codes(discovery) == []
     assert len(discovery.hooks) == 1
+
+
+def test_a_repeated_hooks_member_resolves_no_hook(tmp_path: Path) -> None:
+    """Two `hooks` members decide two different inventories, and which one the runtime keeps
+    is not recorded anywhere this project has verified, so neither is chosen."""
+    first, second = '{"matcher": "a"}', '{"matcher": "b"}'
+    settings_text = f'{{"hooks": {{"Stop": [{first}]}}, "hooks": {{"Stop": [{second}]}}}}'
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings_text})
+
+    assert codes(discovery) == [INVALID]
+    assert locators(discovery, ArtifactType.HOOK) == []
+    assert discovery.hooks == ()
+
+
+def test_a_repeated_event_name_resolves_no_hook(tmp_path: Path) -> None:
+    first, second = '{"matcher": "a"}', '{"matcher": "b"}'
+    settings_text = f'{{"hooks": {{"Stop": [{first}], "Stop": [{second}]}}}}'
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings_text})
+
+    assert codes(discovery) == [INVALID]
+    assert locators(discovery, ArtifactType.HOOK) == []
+    assert discovery.hooks == ()
+
+
+def test_a_repeat_in_configuration_that_is_not_a_hook_leaves_discovery_alone(
+    tmp_path: Path,
+) -> None:
+    """A repeat there decides nothing about what is discovered, so it is not this tool's to
+    resolve or to report."""
+    settings_text = '{"model": "a", "model": "b", "hooks": {"Stop": [{"matcher": "x"}]}}'
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings_text})
+
+    assert codes(discovery) == []
+    assert locators(discovery, ArtifactType.HOOK) == [f"{PROJECT_SETTINGS}#/hooks/Stop/0"]
+    assert len(discovery.hooks) == 1

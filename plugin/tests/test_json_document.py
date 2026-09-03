@@ -15,6 +15,7 @@ import pytest
 from harness_smith.json_document import (
     BYTE_ORDER_MARK,
     JsonDocumentState,
+    own_repeated_names,
     parse_json_document,
     read_json_document,
     repeated_names,
@@ -79,10 +80,12 @@ def test_a_leading_byte_order_mark_does_not_make_the_container_unreadable() -> N
     assert document.members == {"hooks": {}}
 
 
-def test_a_repeated_member_takes_its_last_value_the_way_the_runtime_reads_it() -> None:
+def test_a_repeated_member_keeps_its_last_value_and_is_recorded_as_repeated() -> None:
+    """What a repeat means is the caller's decision; the parser only records that it happened."""
     document = parse_json_document('{"model": "a", "model": "b"}')
 
     assert document.members == {"model": "b"}
+    assert own_repeated_names(document.members) == ("model",)
 
 
 def test_a_file_whose_bytes_are_not_text_is_a_file_finding_not_a_json_one(tmp_path: Path) -> None:
@@ -142,3 +145,10 @@ def test_an_object_whose_names_are_unique_repeats_nothing() -> None:
 def test_a_mapping_this_module_did_not_parse_reports_no_repeats() -> None:
     """It carries no record of its own repeats, and inventing one would be a guess."""
     assert repeated_names({"model": "b"}) == ()
+
+
+def test_a_nested_repeat_is_not_counted_as_the_outer_objects_own() -> None:
+    document = parse_json_document('{"hooks": {"Stop": [{"matcher": "a", "matcher": "b"}]}}')
+
+    assert own_repeated_names(document.members) == ()
+    assert repeated_names(document.members) == ("matcher",)

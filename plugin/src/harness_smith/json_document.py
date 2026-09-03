@@ -29,6 +29,7 @@ __all__ = [
     "JsonDocument",
     "JsonDocumentState",
     "JsonObject",
+    "own_repeated_names",
     "parse_json_document",
     "read_json_document",
     "repeated_names",
@@ -51,11 +52,10 @@ class _UndefinedNumberError(ValueError):
 class JsonObject(dict[str, object]):
     """A parsed JSON object that remembers which of its property names repeated.
 
-    RFC 8259 says names within an object SHOULD be unique and leaves a repeat to the parser;
-    this one keeps the last value, as the runtime's does. RFC 8785 is stricter -- Section 3.1
-    forbids duplicate property names in canonicalisation input -- and once a repeat has
-    collapsed into a mapping no later reader can tell that it happened, which makes the parser
-    the only place it can be recorded.
+    RFC 8259 says names within an object SHOULD be unique and leaves a repeat to the parser.
+    This one retains the last value and records that the name repeated; a caller decides what
+    the repeat means. Recording it is the parser's job because a repeat is gone once the object
+    has collapsed into a mapping, and no later reader can tell that it happened.
     """
 
     repeated_names: tuple[str, ...]
@@ -136,12 +136,17 @@ def read_json_document(path: Path) -> JsonDocument:
     return parse_json_document(text)
 
 
-def repeated_names(value: object) -> tuple[str, ...]:
-    """Every property name that repeated in ``value``, or anywhere nested inside it.
+def own_repeated_names(value: object) -> tuple[str, ...]:
+    """The property names ``value``'s own object repeated, counting nothing nested inside it.
 
     ``value`` is a subtree this module parsed. A mapping built anywhere else carries no record
     of its own repeats and reads as having none.
     """
+    return value.repeated_names if isinstance(value, JsonObject) else ()
+
+
+def repeated_names(value: object) -> tuple[str, ...]:
+    """Every property name that repeated in ``value``, or anywhere nested inside it."""
     if isinstance(value, JsonObject):
         return value.repeated_names + _nested(value.values())
     if isinstance(value, dict):

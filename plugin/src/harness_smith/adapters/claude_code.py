@@ -52,6 +52,7 @@ from harness_smith.frontmatter import Frontmatter, FrontmatterState, read_frontm
 from harness_smith.json_document import (
     JsonDocument,
     JsonDocumentState,
+    own_repeated_names,
     read_json_document,
     repeated_names,
 )
@@ -261,14 +262,25 @@ def _hooks(document: JsonDocument) -> _Hooks:
     past a shape the reader did not expect, and those pointers would address something other
     than the declarations they name; and a declaration whose digest cannot be computed would
     leave the container half identified. Either way no hook in it resolves.
+
+    A repeated property name is refused everywhere it would decide what is discovered: the
+    ``hooks`` member itself, an event inside it, and anything inside a declaration. Which of
+    two same-named members the runtime keeps is not recorded anywhere this project has
+    verified, so a repeat there is reported rather than resolved by picking one. A repeat in
+    configuration that is not a hook decides nothing here and is left alone.
     """
     if document.state is not JsonDocumentState.PARSED:
         return _Hooks(code=CONTAINER_FINDINGS[document.state], reason=document.reason)
+    if HOOKS_MEMBER in own_repeated_names(document.members):
+        return _invalid(f"the `{HOOKS_MEMBER}` member is declared more than once")
     events = document.members.get(HOOKS_MEMBER)
     if events is None:
         return _Hooks()
     if not isinstance(events, dict):
         return _invalid(f"the `{HOOKS_MEMBER}` member is not an object of hook events")
+    repeated_events = own_repeated_names(events)
+    if repeated_events:
+        return _invalid(f"the `{repeated_events[0]}` hook event is declared more than once")
     declarations: list[HookDeclaration] = []
     for event in sorted(events):
         group = events[event]
