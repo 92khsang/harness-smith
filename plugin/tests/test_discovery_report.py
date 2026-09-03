@@ -260,11 +260,11 @@ def test_an_artifact_outside_repository_and_plugin_scope_holds_no_authority(
 ) -> None:
     """`unknown` is one of the four answers, the one that refuses mutation. Saying it where
     nobody holds authority at all would be a fifth value spelled as one of the four."""
-    with pytest.raises(ValueError, match="holds none"):
+    with pytest.raises(ValueError, match="must hold no authority"):
         artifact_with(scope, ManagementAuthority.UNKNOWN)
 
 
 @pytest.mark.parametrize("scope", [Scope.REPOSITORY, Scope.PLUGIN])
 def test_an_artifact_where_mutation_is_conceivable_holds_one(scope: Scope) -> None:
-    with pytest.raises(ValueError, match="holds an authority"):
+    with pytest.raises(ValueError, match="must hold an authority"):
         artifact_with(scope, None)

@@ -261,8 +261,8 @@ class InventoriedArtifact:
         the four."""
         applies = self.scope in AUTHORITY_SCOPES
         if (self.management_authority is not None) is not applies:
-            held = "holds an authority" if applies else "holds none"
-            raise ValueError(f"an artifact in {self.scope.value} scope {held}")
+            required = "must hold an authority" if applies else "must hold no authority"
+            raise ValueError(f"an artifact in {self.scope.value} scope {required}")
 
     @classmethod
     def runtime_native(
