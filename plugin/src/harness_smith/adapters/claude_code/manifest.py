@@ -10,16 +10,40 @@ The merge semantics are the runtime's, from https://code.claude.com/docs/en/plug
   ``experimental.monitors`` **replace** the default location, so declaring one stops the
   default from being scanned
 - ``skills`` **adds** to the default, which is always scanned
-- ``hooks``, ``mcpServers`` and ``lspServers`` are documented as combining by their own rules,
-  and those rules are not written down anywhere this project has verified. Discovery keeps the
-  default alongside whatever the manifest declares rather than inventing a precedence, and
-  never reports one as hiding the other
+- ``hooks``, ``mcpServers`` and ``lspServers`` **add** to the default. The reference says only
+  that they combine by their own rules and does not write those rules down, so the semantics
+  below were read out of the runtime itself, Claude Code 2.1.259, and are recorded here with
+  the evidence:
+
+  - ``hooks``: the manifest schema describes the field as "Path to file with additional hooks
+    (in addition to those in ``hooks/hooks.json``, if it exists), relative to the plugin root",
+    and the loader refuses a manifest path that resolves to the default with "The standard
+    ``hooks/hooks.json`` is loaded automatically, so ``manifest.hooks`` should only reference
+    additional hook files"
+  - ``mcpServers``: "MCP servers to include in the plugin (in addition to those in the
+    ``.mcp.json`` file, if it exists)"
+  - ``lspServers``: the loader reads ``.lsp.json`` first and merges the manifest's servers over
+    it by name, so both locations load and the manifest wins a name collision
+
+  Discovery locates; it does not resolve a name collision between two locations, so the
+  precedence above is recorded rather than applied
 - ``themes`` and ``monitors`` are read under ``experimental`` and at the top level, because the
   documentation says the top-level spelling still works while ``experimental.*`` becomes
-  required, and does not say which wins when a manifest carries both
-- ``hooks``, ``mcpServers`` and ``lspServers`` also accept an inline object, which declares the
-  component in the manifest rather than at a path of its own. The remaining fields take a path
-  or a list of them, so an object there declares no location at all
+  required, and does not say which wins when a manifest carries both. ``monitors`` **replaces**
+  the default: "When omitted, ``monitors/monitors.json`` at the plugin root is loaded if
+  present"
+
+A field that accepts an inline declaration holds the component in the manifest rather than at a
+path of its own, and the shape that declares one differs by field: ``hooks``, ``mcpServers`` and
+``lspServers`` take an object, ``monitors`` takes the monitors array itself. Any of them may
+also arrive as a list mixing paths with inline entries. Every other field takes a path or a list
+of them, so an object or an array of objects there declares no location at all.
+
+Every path must be relative to the plugin root and start with ``./``, and ``skills`` alone also
+accepts ``"."``; both spellings denote the plugin root. A declared path that is inside the root
+but does not follow that syntax resolves to no location, because reading it as a path anyway
+would let ``""`` scan the whole plugin root. Which spellings are valid is the official
+validator's question, so no finding is raised for one here.
 
 One documented exception is out of this scan's reach. A marketplace entry whose ``source``
 resolves to the marketplace root makes ``skills`` replace the default rather than add to it,
@@ -76,12 +100,20 @@ class Merge(StrEnum):
     KEEPS_DEFAULT = "keeps-default"
 
 
+class Inline(StrEnum):
+    """The shape that declares a component inside the manifest, where a field accepts one."""
+
+    NONE = "none"
+    OBJECT = "object"
+    ARRAY = "array"
+
+
 @dataclass(frozen=True)
 class ComponentSpec:
     default: str
     merge: Merge
     experimental: bool = False
-    accepts_inline: bool = False
+    inline: Inline = Inline.NONE
 
 
 SPECS: Mapping[Component, ComponentSpec] = {
@@ -91,10 +123,12 @@ SPECS: Mapping[Component, ComponentSpec] = {
     Component.WORKFLOWS: ComponentSpec("workflows", Merge.REPLACES),
     Component.OUTPUT_STYLES: ComponentSpec("output-styles", Merge.REPLACES),
     Component.THEMES: ComponentSpec("themes", Merge.REPLACES, experimental=True),
-    Component.MONITORS: ComponentSpec("monitors/monitors.json", Merge.REPLACES, experimental=True),
-    Component.HOOKS: ComponentSpec("hooks/hooks.json", Merge.KEEPS_DEFAULT, accepts_inline=True),
-    Component.MCP_SERVERS: ComponentSpec(".mcp.json", Merge.KEEPS_DEFAULT, accepts_inline=True),
-    Component.LSP_SERVERS: ComponentSpec(".lsp.json", Merge.KEEPS_DEFAULT, accepts_inline=True),
+    Component.MONITORS: ComponentSpec(
+        "monitors/monitors.json", Merge.REPLACES, experimental=True, inline=Inline.ARRAY
+    ),
+    Component.HOOKS: ComponentSpec("hooks/hooks.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT),
+    Component.MCP_SERVERS: ComponentSpec(".mcp.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT),
+    Component.LSP_SERVERS: ComponentSpec(".lsp.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT),
 }
 
 
@@ -139,7 +173,8 @@ def resolve(root: Path) -> Resolution:
             if inside is None:
                 diagnostics.append(_escape(component, path))
                 continue
-            resolved.append(inside)
+            if _accepted(component, path):
+                resolved.append(inside)
         if declared.inline:
             resolved.append(MANIFEST)
         default = () if declared.present and spec.merge is Merge.REPLACES else (spec.default,)
@@ -165,9 +200,12 @@ def _declaration(
 ) -> _Declaration:
     """What ``members`` declares for one component, under every key the runtime accepts.
 
-    A value that is neither a path, a list of paths, nor an inline object the field accepts
-    declares no location. Its shape is the official validator's question, and the key still
-    counts as declared.
+    A value of a shape the field does not accept declares no location. Its shape is the
+    official validator's question, and the key still counts as declared.
+
+    A list holds paths, and holds inline entries where the field takes an inline declaration at
+    all: that is how ``monitors`` carries the monitors array itself, and how ``hooks`` carries
+    a mixture of additional hook files and hooks written out in place.
     """
     present = False
     paths: list[str] = []
@@ -178,9 +216,14 @@ def _declaration(
             paths.append(value)
         elif isinstance(value, list):
             paths.extend(entry for entry in value if isinstance(entry, str))
-        elif isinstance(value, dict) and spec.accepts_inline:
+            inline = inline or (spec.inline is not Inline.NONE and _holds_object(value))
+        elif isinstance(value, dict) and spec.inline is Inline.OBJECT:
             inline = True
     return _Declaration(present, tuple(paths), inline)
+
+
+def _holds_object(value: list[object]) -> bool:
+    return any(isinstance(entry, dict) for entry in value)
 
 
 def _declared_values(
@@ -270,6 +313,19 @@ def _ambiguous(members: Mapping[str, object]) -> frozenset[Component]:
         if component.value in repeated
         or (spec.experimental and (EXPERIMENTAL_MEMBER in repeated or component.value in inside))
     )
+
+
+def _accepted(component: Component, declared: str) -> bool:
+    """Whether ``declared`` follows the path syntax the runtime requires of a manifest path.
+
+    A path inside the root that does not follow it is dropped rather than reported: which
+    spellings are valid is the official validator's question. Dropping it is what stops ``""``,
+    which normalises to the plugin root, from turning a component into a scan of the whole
+    plugin.
+    """
+    if declared.startswith(f"{PLUGIN_ROOT}/"):
+        return True
+    return declared == PLUGIN_ROOT and component is Component.SKILLS
 
 
 def _inside(root: Path, declared: str) -> str | None:

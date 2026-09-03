@@ -241,17 +241,23 @@ class ArtifactContainer:
 
 @dataclass(frozen=True)
 class RuntimeComponentObservation:
-    """A runtime surface with no declared Artifact Type: reported, never checked, never
-    mutated."""
+    """A runtime surface with no declared Artifact Type.
+
+    Having no type is a question about which operations apply to the component, not about what
+    the adapter may do with the Surface it sits on. ``capabilities`` is therefore the Surface's
+    policy, looked up from ``scope`` and never composed here.
+    """
 
     locator: str
     component: str
+    scope: Scope
     capabilities: CapabilityPolicy
 
     def as_document(self) -> dict[str, object]:
         return {
             "locator": self.locator,
             "component": self.component,
+            "scope": self.scope.value,
             "capabilities": self.capabilities.as_document(),
         }
 
@@ -265,16 +271,25 @@ class DiscoveryReport:
     observations: tuple[RuntimeComponentObservation, ...] = ()
 
     def as_document(self) -> dict[str, object]:
-        """Every list of Locators is ordered by Locator, the sections and what a container
-        holds alike, because a report is read, compared and diffed."""
-        by_locator = attrgetter("locator")
+        """Every section is ordered, because a report is read, compared and diffed.
+
+        A Locator alone does not order a report that composes several Surfaces: the same
+        Locator can occur in more than one Scope. Each entry is therefore ordered by its Scope
+        first, then its Locator, then what distinguishes two entries sharing both.
+        """
         return {
-            "artifacts": [entry.as_document() for entry in sorted(self.artifacts, key=by_locator)],
+            "artifacts": [
+                entry.as_document()
+                for entry in sorted(self.artifacts, key=lambda e: (e.scope, e.locator, e.type))
+            ],
             "containers": [
-                entry.as_document() for entry in sorted(self.containers, key=by_locator)
+                entry.as_document() for entry in sorted(self.containers, key=attrgetter("locator"))
             ],
             "observations": [
-                entry.as_document() for entry in sorted(self.observations, key=by_locator)
+                entry.as_document()
+                for entry in sorted(
+                    self.observations, key=lambda e: (e.scope, e.locator, e.component)
+                )
             ],
         }
 

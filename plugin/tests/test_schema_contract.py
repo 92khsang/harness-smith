@@ -65,6 +65,10 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
             [member.value for member in Scope],
         ),
         (
+            "$defs/runtimeComponentObservation/properties/scope/enum",
+            [member.value for member in Scope],
+        ),
+        (
             "$defs/inventoriedArtifact/properties/representation/enum",
             [member.value for member in Representation],
         ),
@@ -177,6 +181,7 @@ POPULATED_SURFACE_AUDIT: dict[str, Any] = {
             {
                 "locator": ".mcp.json",
                 "component": "mcp-server",
+                "scope": "external",
                 "capabilities": {
                     "inventory": "managed",
                     "structuralCheck": "observed-only",

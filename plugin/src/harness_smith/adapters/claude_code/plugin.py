@@ -8,10 +8,16 @@ what a cache happens to contain.
 Two kinds of component come out of it. Skills, command-form skills and subagents are Artifacts
 of declared types, so they are enumerated file by file. Workflows, output styles, themes, MCP
 and LSP configuration, monitors, executables and the manifest itself have no Artifact Type at
-all, so they are located and reported as Runtime Component Observations: read, never checked as
-pass or fail, never mutated. A plugin's hooks are Artifacts too, and reading every hook source
-the runtime honours is a separate scan; resolving where a plugin's hooks live is ``manifest``'s
-job and reading them is not this one's.
+all, so they are located rather than enumerated and reported as Runtime Component Observations.
+Having no type decides which operations apply to them; it does not decide what the adapter may
+do with the Surface they sit on, so their Capability Policy is looked up from their Scope like
+any other. A plugin's hooks are Artifacts too, and reading every hook source the runtime honours
+is a separate scan; resolving where a plugin's hooks live is ``manifest``'s job and reading them
+is not this one's.
+
+Everything found here sits on the ``plugin`` Surface, this repository's own plugin product
+source. Classifying an installed third-party plugin as ``external`` is a separate scan's
+question.
 """
 
 from __future__ import annotations
@@ -19,11 +25,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from harness_smith.adapters.claude_code import tree
+from harness_smith.adapters.claude_code.capability import capability
 from harness_smith.adapters.claude_code.manifest import MANIFEST, Component, Resolution, resolve
 from harness_smith.artifacts import (
     ArtifactType,
-    CapabilityPolicy,
-    CapabilityValue,
     Discovery,
     DiscoveryReport,
     InventoriedArtifact,
@@ -49,14 +54,7 @@ OBSERVED: tuple[Component, ...] = (
     Component.LSP_SERVERS,
 )
 
-# What the adapter is willing to do with a runtime component: list it, and nothing else. There
-# is no type to check it against, no lifecycle to advise on, and a plugin is never written to.
-OBSERVED_ONLY = CapabilityPolicy(
-    inventory=CapabilityValue.OBSERVED_ONLY,
-    structural_check=CapabilityValue.UNSUPPORTED,
-    lifecycle_advice=CapabilityValue.UNSUPPORTED,
-    mutation=CapabilityValue.UNSUPPORTED,
-)
+SCOPE = Scope.PLUGIN
 
 
 def discover_plugin(root: Path) -> Discovery:
@@ -87,7 +85,7 @@ def discover_plugin(root: Path) -> Discovery:
 def _artifact(
     found: str, artifact_type: ArtifactType, representation: Representation
 ) -> InventoriedArtifact:
-    return InventoriedArtifact.runtime_native(found, artifact_type, Scope.PLUGIN, representation)
+    return InventoriedArtifact.runtime_native(found, artifact_type, SCOPE, representation)
 
 
 def _skills(root: Path, resolution: Resolution) -> tuple[InventoriedArtifact, ...]:
@@ -148,4 +146,4 @@ def _observations(root: Path, resolution: Resolution) -> tuple[RuntimeComponentO
 
 
 def _observation(component: str, location: str) -> RuntimeComponentObservation:
-    return RuntimeComponentObservation(location, component, OBSERVED_ONLY)
+    return RuntimeComponentObservation(location, component, SCOPE, capability(SCOPE))

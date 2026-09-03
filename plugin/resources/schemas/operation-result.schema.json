@@ -726,6 +726,7 @@
       "required": [
         "locator",
         "component",
+        "scope",
         "capabilities"
       ],
       "properties": {
@@ -734,6 +735,14 @@
         },
         "component": {
           "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "repository",
+            "plugin",
+            "user-global",
+            "external"
+          ]
         },
         "capabilities": {
           "type": "object",

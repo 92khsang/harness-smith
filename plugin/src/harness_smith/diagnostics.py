@@ -144,7 +144,7 @@ def _registry() -> dict[str, DiagnosticSpec]:
             "Move the component inside the plugin root",
         ),
         "HS-PLUGIN-MANIFEST-AMBIGUOUS": (
-            warning,
+            error_1,
             "Declare the component key once",
         ),
         "HS-SKILL-NAME-SHADOWED": (warning, "Rename one, or delete the command file"),

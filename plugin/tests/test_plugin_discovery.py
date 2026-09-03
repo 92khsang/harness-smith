@@ -19,6 +19,7 @@ from harness_smith.artifacts import (
     Activation,
     ActivationCause,
     ArtifactType,
+    CapabilityPolicy,
     CapabilityValue,
     Discovery,
     GovernanceSet,
@@ -327,6 +328,43 @@ def test_a_key_whose_merge_rule_is_undocumented_hides_nothing(tmp_path: Path, ke
     assert SHADOWED not in codes(discovery)
 
 
+@pytest.mark.parametrize("declared", ["", ".", "commands", "custom/commands"])
+def test_a_manifest_path_that_is_not_dot_slash_relative_locates_nothing(
+    tmp_path: Path, declared: str
+) -> None:
+    """The runtime requires a manifest path to start with `./`. One that does not is dropped
+    rather than read as a path: `""` normalises to the plugin root, and reading it would turn
+    a component into a scan of the whole plugin."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", commands=[declared]),
+            "README.md": "# readme\n",
+            "docs/guide.md": "# guide\n",
+            "custom/commands/special.md": "# special\n",
+        },
+    )
+
+    assert locators(discovery, ArtifactType.SKILL) == []
+
+
+@pytest.mark.parametrize("declared", [".", "./"])
+def test_the_skills_field_accepts_the_plugin_root_in_both_spellings(
+    tmp_path: Path, declared: str
+) -> None:
+    discovery = scan(tmp_path, {MANIFEST: manifest(name="p", skills=[declared]), "SKILL.md": SKILL})
+
+    assert locators(discovery, ArtifactType.SKILL) == ["SKILL.md"]
+
+
+def test_only_the_skills_field_accepts_the_bare_plugin_root(tmp_path: Path) -> None:
+    discovery = scan(
+        tmp_path, {MANIFEST: manifest(name="p", agents=["."]), "reviewer.md": "# reviewer\n"}
+    )
+
+    assert locators(discovery, ArtifactType.AGENT) == []
+
+
 @pytest.mark.parametrize("declared", ["../shared-utils", "./nested/../../escape", "/etc"])
 def test_a_component_path_escaping_the_plugin_root_is_reported_not_raised(
     tmp_path: Path, declared: str
@@ -394,18 +432,34 @@ def test_every_runtime_component_with_no_artifact_type_is_observed(tmp_path: Pat
     assert locators(discovery) == []
 
 
-def test_an_observed_component_is_reported_never_checked_and_never_mutated(
+MANAGED = CapabilityValue.MANAGED
+PLUGIN_SURFACE = CapabilityPolicy(MANAGED, MANAGED, MANAGED, MANAGED)
+
+
+def test_an_observed_component_carries_the_policy_of_the_surface_it_sits_on(
     tmp_path: Path,
 ) -> None:
+    """Capability Policy is keyed by Surface alone. Having no Artifact Type decides which
+    operations apply to a component, not what the adapter may do with its Surface."""
     discovery = scan(tmp_path, {".mcp.json": "{}\n"})
 
     (observation,) = discovery.report.observations
-    capabilities = observation.capabilities
 
-    assert capabilities.inventory is CapabilityValue.OBSERVED_ONLY
-    assert capabilities.structural_check is CapabilityValue.UNSUPPORTED
-    assert capabilities.lifecycle_advice is CapabilityValue.UNSUPPORTED
-    assert capabilities.mutation is CapabilityValue.UNSUPPORTED
+    assert observation.scope is Scope.PLUGIN
+    assert observation.capabilities == PLUGIN_SURFACE
+
+
+def test_the_kind_of_component_never_changes_the_policy_within_one_surface(
+    tmp_path: Path,
+) -> None:
+    discovery = scan(
+        tmp_path,
+        {path: "x\n" for path in OBSERVED_COMPONENTS.values()} | {MANIFEST: manifest(name="p")},
+    )
+
+    assert len(discovery.report.observations) == len(OBSERVED_LOCATIONS)
+    assert {entry.scope for entry in discovery.report.observations} == {Scope.PLUGIN}
+    assert {entry.capabilities for entry in discovery.report.observations} == {PLUGIN_SURFACE}
 
 
 def test_a_component_location_that_does_not_exist_is_not_observed(tmp_path: Path) -> None:
@@ -453,15 +507,50 @@ def test_an_experimental_component_is_read_under_either_accepted_key(
 
 
 @pytest.mark.parametrize("key", ["workflows", "outputStyles", "themes"])
-def test_a_field_that_takes_only_paths_declares_nothing_when_given_an_object(
-    tmp_path: Path, key: str
+@pytest.mark.parametrize("value", [{"docs": "x"}, [{"name": "x"}]], ids=["object", "array"])
+def test_a_field_that_takes_only_paths_declares_nothing_when_given_objects(
+    tmp_path: Path, key: str, value: object
 ) -> None:
-    """Only `hooks`, `mcpServers` and `lspServers` accept an inline object. Reading one on a
-    field that takes a path would locate a component where the runtime never loads it."""
-    discovery = scan(tmp_path, {MANIFEST: manifest(name="p", **{key: {"docs": "x"}})})
+    """Only `hooks`, `mcpServers`, `lspServers` and `monitors` accept an inline declaration.
+    Reading one on a field that takes a path would locate a component where the runtime never
+    loads it."""
+    discovery = scan(tmp_path, {MANIFEST: manifest(name="p", **{key: value})})
 
     assert components(discovery) == ["manifest"]
     assert locators(discovery) == []
+
+
+MONITOR = {"name": "deploy-status", "command": "./poll.sh", "description": "Deployment status"}
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [{"experimental": {"monitors": [MONITOR]}}, {"monitors": [MONITOR]}],
+    ids=["experimental", "legacy-top-level"],
+)
+def test_an_inline_monitor_array_is_located_at_the_manifest(
+    tmp_path: Path, declared: Mapping[str, object]
+) -> None:
+    """`monitors` takes the monitors array itself, not only a path to a file holding one."""
+    discovery = scan(tmp_path, {MANIFEST: manifest(name="p", **declared)})
+
+    assert ("monitors", MANIFEST) in observed(discovery)
+
+
+@pytest.mark.parametrize(
+    "declared", ["./config/monitors.json", ["./config/monitors.json"]], ids=["string", "list"]
+)
+def test_a_monitors_path_locates_the_file_it_names(tmp_path: Path, declared: object) -> None:
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", experimental={"monitors": declared}),
+            "config/monitors.json": "[]\n",
+        },
+    )
+
+    assert ("monitors", "config/monitors.json") in observed(discovery)
+    assert ("monitors", MANIFEST) not in observed(discovery)
 
 
 def test_an_inline_component_declaration_is_observed_at_the_manifest(tmp_path: Path) -> None:
@@ -536,6 +625,69 @@ def test_a_repeat_outside_the_component_keys_decides_nothing_here(tmp_path: Path
 
     assert codes(discovery) == []
     assert locators(discovery, ArtifactType.AGENT) == ["agents/reviewer.md"]
+
+
+ADDING = [
+    ("hooks", "hooks/hooks.json", "config/extra-hooks.json", {"PreToolUse": []}),
+    ("mcpServers", ".mcp.json", "config/mcp.json", {"docs": {"command": "serve"}}),
+    ("lspServers", ".lsp.json", "config/lsp.json", {"go": {"command": "gopls"}}),
+]
+
+
+@pytest.mark.parametrize(("key", "default", "custom", "inline"), ADDING)
+def test_a_declared_path_is_added_to_the_default_the_runtime_always_loads(
+    tmp_path: Path, key: str, default: str, custom: str, inline: Mapping[str, object]
+) -> None:
+    """Claude Code 2.1.259 describes each of these fields as declaring components *in addition
+    to* the ones at its default location, so both locations are where the component lives."""
+    root = write_tree(
+        tmp_path / "plugin",
+        {MANIFEST: manifest(name="p", **{key: f"./{custom}"}), default: "{}\n", custom: "{}\n"},
+    )
+
+    assert resolve(root).locations[Component(key)] == (default, custom)
+
+
+@pytest.mark.parametrize(("key", "default", "custom", "inline"), ADDING)
+def test_an_inline_declaration_is_added_to_the_default_too(
+    tmp_path: Path, key: str, default: str, custom: str, inline: Mapping[str, object]
+) -> None:
+    root = write_tree(
+        tmp_path / "plugin", {MANIFEST: manifest(name="p", **{key: inline}), default: "{}\n"}
+    )
+
+    assert resolve(root).locations[Component(key)] == (default, MANIFEST)
+
+
+def test_the_manifest_shapes_published_plugins_use(tmp_path: Path) -> None:
+    """One fixture in the shapes real plugins are written in: a bare `skills` string, a
+    `commands` list that keeps the default beside another directory, an individual skill
+    directory named directly, and a hooks path declared next to the default."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(
+                name="p",
+                skills=["./skills/engineering/tdd", "./.claude/skills/"],
+                commands=["./.claude/commands", "./commands"],
+                hooks="./hooks/extra-hooks.json",
+            ),
+            "skills/engineering/tdd/SKILL.md": SKILL,
+            ".claude/skills/brand/SKILL.md": SKILL,
+            ".claude/commands/plan.md": "# plan\n",
+            "commands/ship.md": "# ship\n",
+            "hooks/extra-hooks.json": "{}\n",
+            "hooks/hooks.json": "{}\n",
+        },
+    )
+
+    assert locators(discovery, ArtifactType.SKILL) == [
+        ".claude/commands/plan.md",
+        ".claude/skills/brand/SKILL.md",
+        "commands/ship.md",
+        "skills/engineering/tdd/SKILL.md",
+    ]
+    assert codes(discovery) == []
 
 
 def test_hook_locations_resolve_for_the_scan_that_reads_them(tmp_path: Path) -> None:
