@@ -1,0 +1,122 @@
+"""Reading a whole YAML file.
+
+The governance manifest is hand-edited YAML, so the same three failures a JSON container has
+apply to it and are kept apart for the same reason: the file's bytes never became text, the
+text is not YAML, or the YAML is not a mapping and so holds no keys to read. A caller chooses
+on the state rather than by reading the reason.
+
+A repeated key is refused by the parser rather than resolved. YAML 1.2 leaves a duplicate to
+the implementation, and which of two same-named keys survives decides what a manifest says
+about a path, so it is reported instead of silently taking one.
+
+The schema is YAML 1.2 core, the same decision the frontmatter reader records: only ``true``
+and ``false`` are booleans, and a tag naming a Python object is refused rather than constructed.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+
+from ruamel.yaml import YAML
+from ruamel.yaml.error import MarkedYAMLError, YAMLError
+
+__all__ = [
+    "YamlDocument",
+    "YamlDocumentState",
+    "parse_yaml_document",
+    "read_yaml_document",
+]
+
+BYTE_ORDER_MARK = "﻿"
+
+
+class YamlDocumentState(StrEnum):
+    PARSED = "parsed"
+    FILE_UNREADABLE = "file-unreadable"
+    UNPARSEABLE = "unparseable"
+    NOT_A_MAPPING = "not-a-mapping"
+
+
+@dataclass(frozen=True)
+class YamlDocument:
+    """A YAML file's keys, or the reason there are none to read."""
+
+    state: YamlDocumentState
+    members: Mapping[str, object]
+    reason: str
+
+    @classmethod
+    def parsed(cls, members: Mapping[str, object]) -> YamlDocument:
+        return cls(YamlDocumentState.PARSED, members, "")
+
+    @classmethod
+    def unparseable(cls, reason: str) -> YamlDocument:
+        return cls(YamlDocumentState.UNPARSEABLE, {}, reason)
+
+    @classmethod
+    def not_a_mapping(cls, reason: str) -> YamlDocument:
+        return cls(YamlDocumentState.NOT_A_MAPPING, {}, reason)
+
+    @classmethod
+    def file_unreadable(cls, reason: str) -> YamlDocument:
+        return cls(YamlDocumentState.FILE_UNREADABLE, {}, reason)
+
+
+def parse_yaml_document(text: str) -> YamlDocument:
+    """Read ``text``, which is a whole YAML file."""
+    try:
+        loaded = _parser().load(text.removeprefix(BYTE_ORDER_MARK))
+    except YAMLError as error:
+        return YamlDocument.unparseable(f"the file is not valid YAML: {_reason(error)}")
+    if loaded is None:
+        return YamlDocument.parsed({})
+    if not isinstance(loaded, dict):
+        return YamlDocument.not_a_mapping(f"the file is a YAML {_shape(loaded)}, not a mapping")
+    unnamed = [key for key in loaded if not isinstance(key, str)]
+    if unnamed:
+        return YamlDocument.not_a_mapping(f"the file has a key that is not text: {unnamed[0]!r}")
+    members: dict[str, object] = dict(loaded)
+    return YamlDocument.parsed(members)
+
+
+def read_yaml_document(path: Path) -> YamlDocument:
+    """Read ``path``'s YAML. A file whose bytes never become text has no document.
+
+    No reason names the path: a diagnostic carries the Locator in its subject, and messages
+    stay free of absolute paths.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return YamlDocument.file_unreadable("the file is not valid UTF-8 text")
+    except OSError as error:
+        return YamlDocument.file_unreadable(
+            f"the file could not be read: {error.strerror or 'unknown error'}"
+        )
+    return parse_yaml_document(text)
+
+
+def _parser() -> YAML:
+    parser = YAML(typ="safe")
+    parser.allow_duplicate_keys = False
+    return parser
+
+
+def _shape(value: object) -> str:
+    return "sequence" if isinstance(value, list) else "scalar"
+
+
+def _reason(error: YAMLError) -> str:
+    detail = str(error).splitlines()[0].strip()
+    where = ""
+    if isinstance(error, MarkedYAMLError):
+        if error.problem is not None:
+            detail = error.problem.strip()
+        if error.problem_mark is not None:
+            where = (
+                f", at line {error.problem_mark.line + 1} column {error.problem_mark.column + 1}"
+            )
+    return f"{detail}{where}"
