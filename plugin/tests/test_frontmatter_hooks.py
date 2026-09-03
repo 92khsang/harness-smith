@@ -7,12 +7,15 @@ one.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 
 from harness_smith.adapters.claude_code import discover_plugin, discover_repository
+from harness_smith.adapters.claude_code import plugin as plugin_scan
+from harness_smith.adapters.claude_code import repository as repository_scan
 from harness_smith.adapters.claude_code.declared import from_frontmatter
 from harness_smith.artifacts import (
     ArtifactType,
@@ -21,7 +24,7 @@ from harness_smith.artifacts import (
     Representation,
     Scope,
 )
-from harness_smith.frontmatter import Frontmatter, FrontmatterState
+from harness_smith.frontmatter import Frontmatter, FrontmatterState, read_frontmatter_file
 from tests.support import write_tree
 
 DECLARATION = (
@@ -202,3 +205,62 @@ def test_fields_read_out_of_a_block_that_did_not_parse_declare_nothing() -> None
     assert from_frontmatter(SKILL, ArtifactType.SKILL, Scope.REPOSITORY, half_read) == (
         from_frontmatter(SKILL, ArtifactType.SKILL, Scope.REPOSITORY, Frontmatter.absent())
     )
+
+
+def counting(seen: Counter[Path]) -> Callable[[Path], Frontmatter]:
+    """The real reader, with a tally of which files were opened."""
+
+    def read(path: Path) -> Frontmatter:
+        seen[path] += 1
+        return read_frontmatter_file(path)
+
+    return read
+
+
+def test_one_scan_opens_a_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reading twice is not a slower way to get the same answer: the file can change between
+    the two reads, and the report would then describe a state that never existed."""
+    seen: Counter[Path] = Counter()
+    monkeypatch.setattr(repository_scan, "read_frontmatter_file", counting(seen))
+
+    discover_repository(
+        write_tree(tmp_path / "repository", {SKILL: declaring(), AGENT: declaring()})
+    )
+
+    assert seen
+    assert max(seen.values()) == 1
+
+
+def test_one_plugin_scan_opens_a_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: Counter[Path] = Counter()
+    monkeypatch.setattr(plugin_scan, "read_frontmatter_file", counting(seen))
+
+    discover_plugin(
+        write_tree(
+            tmp_path / "plugin",
+            {"skills/audit/SKILL.md": declaring(), "agents/reviewer.md": declaring()},
+        )
+    )
+
+    assert seen
+    assert max(seen.values()) == 1
+
+
+def test_the_report_describes_the_read_that_happened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader whose answer changes under it. Whatever the second read would have said, the
+    report is built from the first, because there is no second."""
+    answers = iter(
+        [
+            Frontmatter(FrontmatterState.PARSED, {"hooks": {"Stop": [{"matcher": "a"}]}}, ""),
+            Frontmatter(FrontmatterState.PARSED, {"hooks": {"Notification": [{}]}}, ""),
+        ]
+    )
+    monkeypatch.setattr(
+        repository_scan, "read_frontmatter_file", lambda path: next(answers, Frontmatter.absent())
+    )
+
+    discovery = discover_repository(write_tree(tmp_path / "repository", {SKILL: declaring()}))
+
+    assert hooks(discovery) == [f"{SKILL}#/hooks/Stop/0"]
