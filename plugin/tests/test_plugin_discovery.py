@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from harness_smith.adapters.claude_code import discover_plugin
-from harness_smith.adapters.claude_code.manifest import Component, resolve
+from harness_smith.adapters.claude_code.manifest import PLUGIN_ROOT, Component, resolve
 from harness_smith.artifacts import (
     Activation,
     ActivationCause,
@@ -266,9 +266,9 @@ def test_a_manifest_key_hiding_an_existing_default_directory_is_reported(
     assert codes(discovery) == [SHADOWED]
     finding = discovery.diagnostics[0]
     assert finding.subject.kind is SubjectKind.SURFACE
-    assert finding.subject.locator == MANIFEST
+    assert finding.subject.locator == PLUGIN_ROOT
     assert finding.affected == ("commands",)
-    assert "commands" in finding.message
+    assert MANIFEST in finding.message
 
 
 def test_a_manifest_key_hides_nothing_when_the_default_directory_is_absent(
@@ -342,7 +342,8 @@ def test_a_component_path_escaping_the_plugin_root_is_reported_not_raised(
 
     assert ESCAPES in codes(discovery)
     finding = next(entry for entry in discovery.diagnostics if entry.code == ESCAPES)
-    assert finding.subject.locator == MANIFEST
+    assert finding.subject.kind is SubjectKind.SURFACE
+    assert finding.subject.locator == PLUGIN_ROOT
     assert declared in finding.message
     assert locators(discovery, ArtifactType.AGENT) == []
 
@@ -451,6 +452,18 @@ def test_an_experimental_component_is_read_under_either_accepted_key(
     assert ("themes", expected) in observed(discovery)
 
 
+@pytest.mark.parametrize("key", ["workflows", "outputStyles", "themes"])
+def test_a_field_that_takes_only_paths_declares_nothing_when_given_an_object(
+    tmp_path: Path, key: str
+) -> None:
+    """Only `hooks`, `mcpServers` and `lspServers` accept an inline object. Reading one on a
+    field that takes a path would locate a component where the runtime never loads it."""
+    discovery = scan(tmp_path, {MANIFEST: manifest(name="p", **{key: {"docs": "x"}})})
+
+    assert components(discovery) == ["manifest"]
+    assert locators(discovery) == []
+
+
 def test_an_inline_component_declaration_is_observed_at_the_manifest(tmp_path: Path) -> None:
     """A component declared inline has no path of its own; it is held in the manifest."""
     discovery = scan(
@@ -495,7 +508,7 @@ def test_a_repeated_component_key_refuses_to_decide_where_that_component_lives(
     )
 
     assert codes(discovery) == [AMBIGUOUS]
-    assert discovery.diagnostics[0].subject.locator == MANIFEST
+    assert discovery.diagnostics[0].subject.locator == PLUGIN_ROOT
     assert "agents" in discovery.diagnostics[0].message
     assert locators(discovery, ArtifactType.AGENT) == []
 

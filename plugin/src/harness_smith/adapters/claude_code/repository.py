@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
+from harness_smith.adapters.claude_code import tree
 from harness_smith.artifacts import (
     ArtifactContainer,
     ArtifactType,
@@ -68,10 +69,6 @@ CONTAINER_FINDINGS: Mapping[JsonDocumentState, str] = {
     JsonDocumentState.UNPARSEABLE: "HS-HOOK-CONTAINER-UNPARSEABLE",
     JsonDocumentState.NOT_AN_OBJECT: "HS-HOOK-CONTAINER-INVALID",
 }
-
-# A project skill is exactly one directory deep; a Markdown artifact directory is walked whole.
-PROJECT_SKILLS = "*/SKILL.md"
-MARKDOWN_TREE = "**/*.md"
 
 
 @dataclass(frozen=True)
@@ -135,8 +132,8 @@ def _entry_points(root: Path) -> _Scan:
 def _rules(root: Path) -> _Scan:
     artifacts: list[InventoriedArtifact] = []
     diagnostics: list[Diagnostic] = []
-    for path in _files(root / RULES_DIRECTORY, MARKDOWN_TREE):
-        locator = _locator(root, path)
+    for path in tree.files(root / RULES_DIRECTORY, tree.MARKDOWN_TREE):
+        locator = tree.locator(root, path)
         finding = _frontmatter_finding(locator, read_frontmatter_file(path))
         if finding is not None:
             diagnostics.append(finding)
@@ -165,14 +162,14 @@ def _skills(root: Path) -> _Scan:
     skills_directory = root / SKILLS_DIRECTORY
     directory_form: set[str] = set()
 
-    for path in _files(skills_directory, PROJECT_SKILLS):
+    for path in tree.files(skills_directory, tree.NESTED_SKILLS):
         artifacts.append(
-            _artifact(_locator(root, path), ArtifactType.SKILL, Representation.DIRECTORY)
+            _artifact(tree.locator(root, path), ArtifactType.SKILL, Representation.DIRECTORY)
         )
         directory_form.add(path.parent.name)
 
-    for path in _files(root / COMMANDS_DIRECTORY, MARKDOWN_TREE):
-        locator = _locator(root, path)
+    for path in tree.files(root / COMMANDS_DIRECTORY, tree.MARKDOWN_TREE):
+        locator = tree.locator(root, path)
         artifacts.append(_artifact(locator, ArtifactType.SKILL, Representation.LEGACY_COMMAND))
         if path.stem in directory_form:
             diagnostics.append(
@@ -191,8 +188,8 @@ def _skills(root: Path) -> _Scan:
 def _agents(root: Path) -> _Scan:
     return _Scan(
         tuple(
-            _artifact(_locator(root, path), ArtifactType.AGENT, Representation.FILE)
-            for path in _files(root / AGENTS_DIRECTORY, MARKDOWN_TREE)
+            _artifact(tree.locator(root, path), ArtifactType.AGENT, Representation.FILE)
+            for path in tree.files(root / AGENTS_DIRECTORY, tree.MARKDOWN_TREE)
         )
     )
 
@@ -303,13 +300,3 @@ def _pointer_token(name: str) -> str:
     """One JSON Pointer reference token, per RFC 6901: ``~`` becomes ``~0`` and ``/`` becomes
     ``~1``, in that order, so that a name carrying either stays one segment."""
     return name.replace("~", "~0").replace("/", "~1")
-
-
-def _files(directory: Path, pattern: str) -> list[Path]:
-    if not directory.is_dir():
-        return []
-    return sorted(path for path in directory.glob(pattern) if path.is_file())
-
-
-def _locator(root: Path, path: Path) -> str:
-    return path.relative_to(root).as_posix()

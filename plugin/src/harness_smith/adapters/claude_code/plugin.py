@@ -9,16 +9,17 @@ Two kinds of component come out of it. Skills, command-form skills and subagents
 of declared types, so they are enumerated file by file. Workflows, output styles, themes, MCP
 and LSP configuration, monitors, executables and the manifest itself have no Artifact Type at
 all, so they are located and reported as Runtime Component Observations: read, never checked as
-pass or fail, never mutated. A plugin's hooks are Artifacts too, and the scan that reads every
-hook source the runtime honours consumes the locations resolved here.
+pass or fail, never mutated. A plugin's hooks are Artifacts too, and reading every hook source
+the runtime honours is a separate scan; resolving where a plugin's hooks live is ``manifest``'s
+job and reading them is not this one's.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from harness_smith.adapters.claude_code import tree
 from harness_smith.adapters.claude_code.manifest import MANIFEST, Component, Resolution, resolve
-from harness_smith.adapters.claude_code.tree import files, locator
 from harness_smith.artifacts import (
     ArtifactType,
     CapabilityPolicy,
@@ -56,11 +57,6 @@ OBSERVED_ONLY = CapabilityPolicy(
     lifecycle_advice=CapabilityValue.UNSUPPORTED,
     mutation=CapabilityValue.UNSUPPORTED,
 )
-
-SKILL_FILE = "SKILL.md"
-NESTED_SKILLS = "*/SKILL.md"
-MARKDOWN = ".md"
-MARKDOWN_TREE = "**/*.md"
 
 
 def discover_plugin(root: Path) -> Discovery:
@@ -101,10 +97,10 @@ def _skills(root: Path, resolution: Resolution) -> tuple[InventoriedArtifact, ..
     found: list[str] = []
     for location in resolution.locations[Component.SKILLS]:
         directory = root / location
-        if (directory / SKILL_FILE).is_file():
-            found.append(locator(root, directory / SKILL_FILE))
+        if (directory / tree.SKILL_FILE).is_file():
+            found.append(tree.locator(root, directory / tree.SKILL_FILE))
             continue
-        found.extend(locator(root, path) for path in files(directory, NESTED_SKILLS))
+        found.extend(tree.locator(root, path) for path in tree.files(directory, tree.NESTED_SKILLS))
     return _artifacts(found, ArtifactType.SKILL, Representation.DIRECTORY)
 
 
@@ -120,10 +116,10 @@ def _markdown(
     for location in resolution.locations[component]:
         path = root / location
         if path.is_file():
-            if path.suffix == MARKDOWN:
-                found.append(locator(root, path))
+            if path.suffix == tree.MARKDOWN:
+                found.append(tree.locator(root, path))
             continue
-        found.extend(locator(root, entry) for entry in files(path, MARKDOWN_TREE))
+        found.extend(tree.locator(root, entry) for entry in tree.files(path, tree.MARKDOWN_TREE))
     return _artifacts(found, artifact_type, representation)
 
 

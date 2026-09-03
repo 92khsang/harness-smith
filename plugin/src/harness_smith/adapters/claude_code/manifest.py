@@ -17,6 +17,13 @@ The merge semantics are the runtime's, from https://code.claude.com/docs/en/plug
 - ``themes`` and ``monitors`` are read under ``experimental`` and at the top level, because the
   documentation says the top-level spelling still works while ``experimental.*`` becomes
   required, and does not say which wins when a manifest carries both
+- ``hooks``, ``mcpServers`` and ``lspServers`` also accept an inline object, which declares the
+  component in the manifest rather than at a path of its own. The remaining fields take a path
+  or a list of them, so an object there declares no location at all
+
+One documented exception is out of this scan's reach. A marketplace entry whose ``source``
+resolves to the marketplace root makes ``skills`` replace the default rather than add to it,
+and that condition lives in the marketplace entry, which a plugin root does not carry.
 
 Two rules bound the paths themselves. Every path is relative to the plugin root, and the
 runtime rejects one that resolves outside it, loading the plugin without that component. And
@@ -33,6 +40,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePath
 
+from harness_smith.adapters.claude_code import tree
 from harness_smith.diagnostics import Diagnostic
 from harness_smith.json_document import JsonDocumentState, own_repeated_names, read_json_document
 from harness_smith.vocabulary import Subject, SubjectKind
@@ -41,7 +49,8 @@ __all__ = ["MANIFEST", "Component", "Merge", "Resolution", "resolve"]
 
 MANIFEST = ".claude-plugin/plugin.json"
 EXPERIMENTAL_MEMBER = "experimental"
-SKILL_FILE = "SKILL.md"
+
+# The plugin root, as a location and as the Locator of the Surface a manifest finding is about.
 PLUGIN_ROOT = "."
 
 
@@ -72,6 +81,7 @@ class ComponentSpec:
     default: str
     merge: Merge
     experimental: bool = False
+    accepts_inline: bool = False
 
 
 SPECS: Mapping[Component, ComponentSpec] = {
@@ -82,9 +92,9 @@ SPECS: Mapping[Component, ComponentSpec] = {
     Component.OUTPUT_STYLES: ComponentSpec("output-styles", Merge.REPLACES),
     Component.THEMES: ComponentSpec("themes", Merge.REPLACES, experimental=True),
     Component.MONITORS: ComponentSpec("monitors/monitors.json", Merge.REPLACES, experimental=True),
-    Component.HOOKS: ComponentSpec("hooks/hooks.json", Merge.KEEPS_DEFAULT),
-    Component.MCP_SERVERS: ComponentSpec(".mcp.json", Merge.KEEPS_DEFAULT),
-    Component.LSP_SERVERS: ComponentSpec(".lsp.json", Merge.KEEPS_DEFAULT),
+    Component.HOOKS: ComponentSpec("hooks/hooks.json", Merge.KEEPS_DEFAULT, accepts_inline=True),
+    Component.MCP_SERVERS: ComponentSpec(".mcp.json", Merge.KEEPS_DEFAULT, accepts_inline=True),
+    Component.LSP_SERVERS: ComponentSpec(".lsp.json", Merge.KEEPS_DEFAULT, accepts_inline=True),
 }
 
 
@@ -134,7 +144,7 @@ def resolve(root: Path) -> Resolution:
             resolved.append(MANIFEST)
         default = () if declared.present and spec.merge is Merge.REPLACES else (spec.default,)
         locations[component] = _unique(
-            (*default, *resolved, *_root_skill(root, component, declared))
+            (*default, *resolved, *_root_skill(root, component, spec, declared))
         )
         shadowed = _shadow(root, component, spec, declared, locations[component])
         if shadowed is not None:
@@ -155,8 +165,9 @@ def _declaration(
 ) -> _Declaration:
     """What ``members`` declares for one component, under every key the runtime accepts.
 
-    A value that is neither a path, a list of paths, nor an inline object declares no location.
-    Its shape is the official validator's question, and the key still counts as declared.
+    A value that is neither a path, a list of paths, nor an inline object the field accepts
+    declares no location. Its shape is the official validator's question, and the key still
+    counts as declared.
     """
     present = False
     paths: list[str] = []
@@ -167,7 +178,7 @@ def _declaration(
             paths.append(value)
         elif isinstance(value, list):
             paths.extend(entry for entry in value if isinstance(entry, str))
-        elif isinstance(value, dict):
+        elif isinstance(value, dict) and spec.accepts_inline:
             inline = True
     return _Declaration(present, tuple(paths), inline)
 
@@ -184,7 +195,9 @@ def _declared_values(
     return values
 
 
-def _root_skill(root: Path, component: Component, declared: _Declaration) -> tuple[str, ...]:
+def _root_skill(
+    root: Path, component: Component, spec: ComponentSpec, declared: _Declaration
+) -> tuple[str, ...]:
     """The plugin root, where a plugin that ships exactly one skill puts its ``SKILL.md``.
 
     The runtime loads that layout only when there is no ``skills/`` directory and no ``skills``
@@ -192,7 +205,7 @@ def _root_skill(root: Path, component: Component, declared: _Declaration) -> tup
     """
     if component is not Component.SKILLS or declared.present:
         return ()
-    if (root / SPECS[component].default).is_dir() or not (root / SKILL_FILE).is_file():
+    if (root / spec.default).is_dir() or not (root / tree.SKILL_FILE).is_file():
         return ()
     return (PLUGIN_ROOT,)
 
@@ -212,8 +225,8 @@ def _shadow(
         return None
     return _finding(
         "HS-PLUGIN-SHADOWED-DEFAULT-DIR",
-        f"the `{component.value}` key does not list the default `{spec.default}`, which exists "
-        "and is no longer loaded",
+        f"the `{component.value}` key in `{MANIFEST}` does not list the default "
+        f"`{spec.default}`, which exists and is no longer loaded",
         affected=(spec.default,),
     )
 
@@ -221,24 +234,25 @@ def _shadow(
 def _escape(component: Component, declared: str) -> Diagnostic:
     return _finding(
         "HS-PLUGIN-COMPONENT-PATH-ESCAPES-ROOT",
-        f"the `{component.value}` path `{declared}` resolves outside the plugin root, so the "
-        "runtime loads the plugin without that component",
+        f"the `{component.value}` path `{declared}` in `{MANIFEST}` resolves outside the "
+        "plugin root, so the runtime loads the plugin without that component",
     )
 
 
 def _ambiguity(component: Component) -> Diagnostic:
     return _finding(
         "HS-PLUGIN-MANIFEST-AMBIGUOUS",
-        f"the `{component.value}` key is declared more than once, so where the runtime loads "
-        "that component from is not decided",
+        f"`{MANIFEST}` declares the `{component.value}` key more than once, so where the "
+        "runtime loads that component from is not decided",
     )
 
 
 def _finding(code: str, message: str, affected: Iterable[str] = ()) -> Diagnostic:
-    """A manifest finding is about the plugin Surface's component layout, and is subject to the
-    manifest that declares it, which is where the repair goes."""
+    """A manifest finding is about the plugin Surface's component layout rather than about any
+    one artifact, so the Surface is its subject and the plugin root locates it. The manifest to
+    repair is named in the message, because a Surface is a scope boundary and not a file."""
     return Diagnostic.of(
-        code, Subject(SubjectKind.SURFACE, MANIFEST), message=message, affected=affected
+        code, Subject(SubjectKind.SURFACE, PLUGIN_ROOT), message=message, affected=affected
     )
 
 
