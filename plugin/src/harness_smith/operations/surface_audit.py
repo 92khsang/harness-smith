@@ -11,6 +11,7 @@ from harness_smith.operations.base import (
     OperationRequest,
     OperationSpec,
 )
+from harness_smith.scan import DiscoveryRequest
 
 # The three parts of a Discovery Report, in report order, with the columns each of a section's
 # entries is printed as. Every section ends with its Locator, so the ragged column is the last.
@@ -32,7 +33,7 @@ class SurfaceAudit(Operation):
     )
 
     def run(self, request: OperationRequest) -> OperationOutcome:
-        discovery = claude_code.discover(request.repository_root)
+        discovery = claude_code.discover(DiscoveryRequest(request.repository_root))
         return OperationOutcome(
             data=discovery.report.as_document(), diagnostics=discovery.diagnostics
         )

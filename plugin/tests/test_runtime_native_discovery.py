@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from harness_smith.adapters import claude_code
+from harness_smith.adapters.claude_code import discover_repository
 from harness_smith.artifacts import (
     Activation,
     ActivationCause,
@@ -55,7 +55,7 @@ def settings(**members: object) -> str:
 
 
 def scan(tmp_path: Path, files: Mapping[str, str]) -> Discovery:
-    return claude_code.discover(write_tree(tmp_path / "repository", files))
+    return discover_repository(write_tree(tmp_path / "repository", files))
 
 
 def locators(discovery: Discovery, artifact_type: ArtifactType | None = None) -> list[str]:
@@ -153,7 +153,7 @@ def test_a_rule_that_is_not_utf_8_is_a_file_finding_not_a_yaml_one(tmp_path: Pat
     repository = write_tree(tmp_path / "repository", {".claude/rules/keep.md": "# keep\n"})
     (repository / ".claude" / "rules" / "broken.md").write_bytes(b"---\nname: \xff\xfe\n---\n")
 
-    discovery = claude_code.discover(repository)
+    discovery = discover_repository(repository)
 
     assert codes(discovery) == ["HS-RULE-FILE-UNREADABLE"]
     assert discovery.diagnostics[0].subject.locator == ".claude/rules/broken.md"
@@ -465,7 +465,7 @@ def test_settings_whose_bytes_are_not_text_is_a_file_finding_not_a_json_one(
     (repository / ".claude").mkdir(exist_ok=True)
     (repository / PROJECT_SETTINGS).write_bytes(b'{"model": "\xff\xfe"}')
 
-    discovery = claude_code.discover(repository)
+    discovery = discover_repository(repository)
 
     assert codes(discovery) == ["HS-HOOK-CONTAINER-FILE-UNREADABLE"]
     assert "UTF-8" in discovery.diagnostics[0].message
