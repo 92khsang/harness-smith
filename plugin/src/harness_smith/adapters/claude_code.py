@@ -25,6 +25,7 @@ repository-wide walk. Neither is discovered here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
@@ -38,18 +39,21 @@ from harness_smith.artifacts import (
     Discovery,
     DiscoveryReport,
     GovernanceSet,
+    HookDeclaration,
     InventoriedArtifact,
     ManagementAuthority,
     Provenance,
     Representation,
     Scope,
 )
+from harness_smith.canonical_json import CanonicalisationError, declaration_digest
 from harness_smith.diagnostics import Diagnostic
 from harness_smith.frontmatter import Frontmatter, FrontmatterState, read_frontmatter_file
 from harness_smith.json_document import (
     JsonDocument,
     JsonDocumentState,
     read_json_document,
+    repeated_names,
 )
 from harness_smith.vocabulary import Subject, SubjectKind
 
@@ -64,6 +68,14 @@ PROJECT_SETTINGS = ".claude/settings.json"
 # configuration the runtime owns and harness-smith leaves alone.
 HOOKS_MEMBER = "hooks"
 
+# What went wrong before the container's members could be read at all. The three are separate
+# codes because they are separate fixes: repair the file, repair its JSON, or repair its shape.
+CONTAINER_FINDINGS: Mapping[JsonDocumentState, str] = {
+    JsonDocumentState.FILE_UNREADABLE: "HS-HOOK-CONTAINER-FILE-UNREADABLE",
+    JsonDocumentState.UNPARSEABLE: "HS-HOOK-CONTAINER-UNPARSEABLE",
+    JsonDocumentState.NOT_AN_OBJECT: "HS-HOOK-CONTAINER-INVALID",
+}
+
 # A project skill is exactly one directory deep; a Markdown artifact directory is walked whole.
 PROJECT_SKILLS = "*/SKILL.md"
 MARKDOWN_TREE = "**/*.md"
@@ -76,13 +88,15 @@ class _Scan:
     artifacts: tuple[InventoriedArtifact, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
     containers: tuple[ArtifactContainer, ...] = ()
+    hooks: tuple[HookDeclaration, ...] = ()
 
 
 @dataclass(frozen=True)
-class _Declarations:
-    """The pointers a container's hook declarations sit at, or why none could be addressed."""
+class _Hooks:
+    """A container's hook declarations, or the finding that says why there are none."""
 
-    pointers: tuple[str, ...] = ()
+    declarations: tuple[HookDeclaration, ...] = ()
+    code: str = ""
     reason: str = ""
 
 
@@ -95,6 +109,7 @@ def discover(root: Path) -> Discovery:
             containers=tuple(container for scan in scans for container in scan.containers),
         ),
         diagnostics=tuple(diagnostic for scan in scans for diagnostic in scan.diagnostics),
+        hooks=tuple(declaration for scan in scans for declaration in scan.hooks),
     )
 
 
@@ -215,58 +230,88 @@ def _settings(root: Path) -> _Scan:
     path = root / PROJECT_SETTINGS
     if not path.is_file():
         return _Scan()
-    declarations = _declarations(read_json_document(path))
-    locators = tuple(f"{PROJECT_SETTINGS}#{pointer}" for pointer in declarations.pointers)
-    container = (ArtifactContainer(PROJECT_SETTINGS, ContainerFormat.JSON, locators),)
-    if declarations.reason:
-        unparseable = Diagnostic.of(
-            "HS-HOOK-CONTAINER-UNPARSEABLE",
-            Subject(SubjectKind.CONTAINER, PROJECT_SETTINGS),
-            message=declarations.reason,
-        )
-        return _Scan(diagnostics=(unparseable,), containers=container)
-    artifacts = tuple(
-        _artifact(locator, ArtifactType.HOOK, Representation.CONTAINER_ENTRY)
-        for locator in locators
+    hooks = _hooks(read_json_document(path))
+    container = (
+        ArtifactContainer(
+            PROJECT_SETTINGS,
+            ContainerFormat.JSON,
+            tuple(declaration.locator for declaration in hooks.declarations),
+        ),
     )
-    return _Scan(artifacts, containers=container)
+    if hooks.code:
+        finding = Diagnostic.of(
+            hooks.code, Subject(SubjectKind.CONTAINER, PROJECT_SETTINGS), message=hooks.reason
+        )
+        return _Scan(diagnostics=(finding,), containers=container)
+    artifacts = tuple(
+        _artifact(declaration.locator, ArtifactType.HOOK, Representation.CONTAINER_ENTRY)
+        for declaration in hooks.declarations
+    )
+    return _Scan(artifacts, containers=container, hooks=hooks.declarations)
 
 
-def _declarations(document: JsonDocument) -> _Declarations:
-    """Where each hook declaration in ``document`` sits, as a JSON Pointer into it.
+def _hooks(document: JsonDocument) -> _Hooks:
+    """Every hook declaration in ``document``, each addressed by a JSON Pointer and digested.
 
     One declaration is one matcher group. The matcher and the ordered actions it runs are a
     single execution declaration, and reordering those actions changes what runs, so the group
     is addressed whole at ``/hooks/<event>/<index>`` rather than per action.
 
-    Addressing is all or nothing. A container read only in part would hand out pointers
-    computed past a shape the reader did not expect, and those pointers would address
-    something other than the declarations they name.
-
-    The specification names ``HS-HOOK-CONTAINER-UNPARSEABLE`` for a containing file that does
-    not parse. A file that parses into a shape no pointer can be computed from reaches the
-    same outcome by another route, nothing in the registry describes it more narrowly, and
-    reporting it under this code beats leaving a declared hook unreported.
+    Reading is all or nothing. A container read only in part would hand out pointers computed
+    past a shape the reader did not expect, and those pointers would address something other
+    than the declarations they name; and a declaration whose digest cannot be computed would
+    leave the container half identified. Either way no hook in it resolves.
     """
     if document.state is not JsonDocumentState.PARSED:
-        return _Declarations(reason=document.reason)
+        return _Hooks(code=CONTAINER_FINDINGS[document.state], reason=document.reason)
     events = document.members.get(HOOKS_MEMBER)
     if events is None:
-        return _Declarations()
+        return _Hooks()
     if not isinstance(events, dict):
-        return _Declarations(reason=f"the `{HOOKS_MEMBER}` member is not an object of hook events")
-    pointers: list[str] = []
+        return _invalid(f"the `{HOOKS_MEMBER}` member is not an object of hook events")
+    declarations: list[HookDeclaration] = []
     for event in sorted(events):
-        declarations = events[event]
-        if not isinstance(declarations, list):
-            return _Declarations(reason=f"the `{event}` hook event is not an array of declarations")
-        for index, declaration in enumerate(declarations):
+        group = events[event]
+        if not isinstance(group, list):
+            return _invalid(f"the `{event}` hook event is not an array of declarations")
+        for index, declaration in enumerate(group):
             if not isinstance(declaration, dict):
-                return _Declarations(
-                    reason=f"the `{event}` hook event holds a declaration that is not an object"
+                return _invalid(
+                    f"the `{event}` hook event holds a declaration that is not an object"
                 )
-            pointers.append(f"/{HOOKS_MEMBER}/{_pointer_token(event)}/{index}")
-    return _Declarations(tuple(pointers))
+            locator = f"{PROJECT_SETTINGS}#/{HOOKS_MEMBER}/{_pointer_token(event)}/{index}"
+            digested = _digest(locator, declaration)
+            if digested is None:
+                return _invalid(_digest_reason(event, index, declaration))
+            declarations.append(digested)
+    return _Hooks(tuple(declarations))
+
+
+def _digest(locator: str, declaration: Mapping[str, object]) -> HookDeclaration | None:
+    """``declaration`` with its Declaration Digest, or nothing when RFC 8785 refuses it.
+
+    Section 3.1 admits only declarations with no duplicate property names, whose strings are
+    Unicode and whose numbers are IEEE 754 doubles. Digesting one that fails those conditions
+    and calling the result an RFC 8785 digest would be a false claim, so it is refused instead.
+    """
+    if repeated_names(declaration):
+        return None
+    try:
+        return HookDeclaration(locator, declaration_digest(declaration))
+    except CanonicalisationError:
+        return None
+
+
+def _digest_reason(event: str, index: int, declaration: Mapping[str, object]) -> str:
+    where = f"the declaration at index {index} of the `{event}` hook event"
+    repeated = repeated_names(declaration)
+    if repeated:
+        return f"{where} repeats the property name `{repeated[0]}`"
+    return f"{where} holds a value that has no canonical JSON form"
+
+
+def _invalid(reason: str) -> _Hooks:
+    return _Hooks(code="HS-HOOK-CONTAINER-INVALID", reason=reason)
 
 
 def _pointer_token(name: str) -> str:

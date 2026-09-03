@@ -29,6 +29,7 @@ __all__ = [
     "Discovery",
     "DiscoveryReport",
     "GovernanceSet",
+    "HookDeclaration",
     "InventoriedArtifact",
     "ManagementAuthority",
     "Provenance",
@@ -248,8 +249,28 @@ class DiscoveryReport:
 
 
 @dataclass(frozen=True)
+class HookDeclaration:
+    """A hook declaration a scan read, with the digest that recognises it once it moves.
+
+    A Locator is a position, so recognising the same declaration at a new one needs a value
+    the declaration carries itself. That is the Declaration Digest, and it belongs to the lock
+    rather than to a report: it resolves a lock-tracked hook, and an authored hook has no lock
+    entry to resolve. Discovery computes it anyway, so that the reader of the lock never parses
+    the container a second time and risks a second answer.
+    """
+
+    locator: str
+    declaration_digest: str
+
+
+@dataclass(frozen=True)
 class Discovery:
-    """One scan: the report it produced and what it found wrong while producing it."""
+    """One scan: the report it produced, the hook declarations standing behind its Container
+    Inventory, and what it found wrong while producing them.
+
+    ``hooks`` is deliberately outside ``report``, which is the serialised part.
+    """
 
     report: DiscoveryReport
     diagnostics: tuple[Diagnostic, ...] = ()
+    hooks: tuple[HookDeclaration, ...] = ()

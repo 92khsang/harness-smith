@@ -217,15 +217,55 @@ def test_a_settings_file_with_no_hooks_block_declares_none(repository: Path) -> 
     ]
 
 
-def test_a_malformed_container_is_a_violation_and_resolves_no_hook(repository: Path) -> None:
+def test_a_container_whose_json_does_not_parse_is_a_violation(repository: Path) -> None:
     run = audit(repository, {".claude/settings.json": '{"hooks": {"Stop": [{"matcher": ""}'})
 
     assert run.exit_code == 1
     assert run.diagnostic_codes == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
     finding = run.document["diagnostics"][0]
     assert finding["subject"] == {"kind": "container", "locator": ".claude/settings.json"}
-    assert finding["remediation"] == "Fix the file"
+    assert finding["remediation"] == "Fix the JSON syntax"
     assert artifacts(run) == []
+
+
+def test_a_container_that_cannot_be_read_as_text_is_its_own_finding(repository: Path) -> None:
+    write_tree(repository, {"CLAUDE.md": "# entry\n"})
+    (repository / ".claude").mkdir(exist_ok=True)
+    (repository / ".claude" / "settings.json").write_bytes(b'{"model": "\xff\xfe"}')
+
+    run = run_cli("surface-audit", "--format", "json", cwd=repository)
+
+    assert run.exit_code == 1
+    assert run.diagnostic_codes == ["HS-HOOK-CONTAINER-FILE-UNREADABLE"]
+    assert run.document["diagnostics"][0]["remediation"] == (
+        "Make the container readable UTF-8 text, then rerun"
+    )
+
+
+REFUSED_DECLARATIONS: Mapping[str, str] = {
+    "a number outside the double range": '{"timeout": 1e999}',
+    "an integer outside the double range": '{"timeout": 1' + "0" * 400 + "}",
+    "a lone surrogate": '{"command": "' + chr(92) + 'ud800"}',
+    "a repeated property name": '{"matcher": "a", "matcher": "b"}',
+}
+
+
+@pytest.mark.parametrize(("name", "declaration"), sorted(REFUSED_DECLARATIONS.items()))
+def test_a_declaration_rfc_8785_refuses_ends_as_a_violation_not_a_crash(
+    repository: Path, name: str, declaration: str
+) -> None:
+    """RFC 8785 Section 3.1 admits no duplicate property names, and no number outside the
+    IEEE 754 double range. A declaration failing that has no Declaration Digest, so it closes
+    as a container finding and exit 1 rather than escaping as an internal error and exit 3."""
+    settings = '{"hooks": {"Stop": [' + declaration + "]}}"
+
+    run = audit(repository, {".claude/settings.json": settings})
+
+    assert run.exit_code == 1, name
+    assert run.diagnostic_codes == ["HS-HOOK-CONTAINER-INVALID"], name
+    assert run.stderr == "", name
+    assert artifacts(run) == []
+    assert run.document["data"]["containers"][0]["holds"] == []
 
 
 def test_machine_local_settings_are_left_out_of_the_audit(repository: Path) -> None:

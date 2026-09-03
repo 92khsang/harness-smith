@@ -32,6 +32,20 @@ from tests.support import write_tree
 
 PROJECT_SETTINGS = ".claude/settings.json"
 
+UNPARSEABLE = "HS-HOOK-CONTAINER-UNPARSEABLE"
+INVALID = "HS-HOOK-CONTAINER-INVALID"
+
+# Declarations RFC 8785 Section 3.1 refuses as canonicalisation input.
+HUGE_INTEGER = '{"timeout": 1' + "0" * 400 + "}"
+LONE_SURROGATE = '{"command": "' + chr(92) + 'ud800"}'
+REPEATED_NAME = '{"matcher": "a", "matcher": "b"}'
+
+
+def declaring(declaration: str) -> str:
+    """A settings file whose one hook event holds ``declaration``."""
+    return '{"hooks": {"Stop": [' + declaration + "]}}"
+
+
 FORMAT = {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "fmt.sh"}]}
 OTHER = {"matcher": "Bash", "hooks": [{"type": "command", "command": "audit.sh"}]}
 
@@ -394,24 +408,32 @@ def test_a_hook_carries_the_same_unresolved_classification_as_any_other_artifact
 
 
 @pytest.mark.parametrize(
-    ("name", "content"),
+    ("name", "content", "expected"),
     [
-        ("a truncated file", '{"hooks": {'),
-        ("a file that is not an object", "[]"),
-        ("a hooks block that is not an object", '{"hooks": "fmt.sh"}'),
-        ("an event that is not an array", '{"hooks": {"Stop": {"matcher": ""}}}'),
-        ("a declaration that is not an object", '{"hooks": {"Stop": ["fmt.sh"]}}'),
+        ("a truncated file", '{"hooks": {', UNPARSEABLE),
+        ("a number JSON does not define", declaring('{"timeout": NaN}'), UNPARSEABLE),
+        ("a file that is not an object", "[]", INVALID),
+        ("a hooks block that is not an object", '{"hooks": "fmt.sh"}', INVALID),
+        ("an event that is not an array", '{"hooks": {"Stop": {"matcher": ""}}}', INVALID),
+        ("a declaration that is not an object", '{"hooks": {"Stop": ["fmt.sh"]}}', INVALID),
+        ("a number outside the double range", declaring('{"timeout": 1e999}'), INVALID),
+        ("an integer outside the double range", declaring(HUGE_INTEGER), INVALID),
+        ("a lone surrogate", declaring(LONE_SURROGATE), INVALID),
+        ("a repeated property name", declaring(REPEATED_NAME), INVALID),
     ],
 )
-def test_a_container_whose_declarations_cannot_be_addressed_resolves_no_hook(
-    tmp_path: Path, name: str, content: str
+def test_a_container_whose_declarations_cannot_be_read_resolves_no_hook(
+    tmp_path: Path, name: str, content: str, expected: str
 ) -> None:
+    """Reading is all or nothing, and the finding says which repair the file needs: its JSON
+    syntax, or the shape and values of the declarations written in it."""
     discovery = scan(tmp_path, {PROJECT_SETTINGS: content})
 
-    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"], name
+    assert codes(discovery) == [expected], name
     assert discovery.diagnostics[0].subject.kind is SubjectKind.CONTAINER
     assert discovery.diagnostics[0].subject.locator == PROJECT_SETTINGS
     assert locators(discovery, ArtifactType.HOOK) == []
+    assert discovery.hooks == ()
 
 
 def test_a_broken_container_is_still_reported_as_a_container_holding_nothing(
@@ -432,18 +454,20 @@ def test_a_readable_event_in_a_broken_container_resolves_no_hook_either(tmp_path
         {PROJECT_SETTINGS: '{"hooks": {"PostToolUse": [{"matcher": ""}], "Stop": "fmt.sh"}}'},
     )
 
-    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
+    assert codes(discovery) == [INVALID]
     assert locators(discovery, ArtifactType.HOOK) == []
 
 
-def test_settings_whose_bytes_are_not_text_is_an_unparseable_container(tmp_path: Path) -> None:
+def test_settings_whose_bytes_are_not_text_is_a_file_finding_not_a_json_one(
+    tmp_path: Path,
+) -> None:
     repository = write_tree(tmp_path / "repository", {"CLAUDE.md": "# entry\n"})
     (repository / ".claude").mkdir(exist_ok=True)
     (repository / PROJECT_SETTINGS).write_bytes(b'{"model": "\xff\xfe"}')
 
     discovery = claude_code.discover(repository)
 
-    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
+    assert codes(discovery) == ["HS-HOOK-CONTAINER-FILE-UNREADABLE"]
     assert "UTF-8" in discovery.diagnostics[0].message
 
 
@@ -525,3 +549,69 @@ def test_what_a_container_holds_is_ordered_the_way_the_artifact_list_is(tmp_path
         f"{PROJECT_SETTINGS}#/hooks/Stop/1",
         f"{PROJECT_SETTINGS}#/hooks/Stop/10",
     ]
+
+
+def test_every_discovered_hook_carries_a_declaration_digest(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT]})})
+
+    assert [declaration.locator for declaration in discovery.hooks] == [
+        f"{PROJECT_SETTINGS}#/hooks/PostToolUse/0"
+    ]
+    assert len(discovery.hooks[0].declaration_digest) == 64
+
+
+def test_the_declaration_digest_is_not_serialised_into_the_report(tmp_path: Path) -> None:
+    """It resolves a lock-tracked hook, and an authored hook has no lock entry to resolve, so
+    it belongs to the lock rather than to a report anyone reads."""
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT]})})
+
+    assert discovery.hooks[0].declaration_digest not in json.dumps(discovery.report.as_document())
+
+
+def test_two_identical_declarations_share_a_digest_and_differ_only_in_position(
+    tmp_path: Path,
+) -> None:
+    """This is what makes an ambiguous relocation detectable rather than guessed at."""
+    discovery = scan(
+        tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT, dict(FORMAT)]})}
+    )
+
+    first, second = discovery.hooks
+
+    assert first.declaration_digest == second.declaration_digest
+    assert first.locator != second.locator
+
+
+def test_a_declaration_written_differently_digests_the_same(tmp_path: Path) -> None:
+    """Key order and whitespace are how the file is written, not what it declares."""
+    one_way = '{"hooks": {"Stop": [{"matcher": "Bash", "hooks": []}]}}'
+    the_other = '{"hooks":{"Stop":[{"hooks":[],   "matcher":"Bash"}]}}'
+
+    first = scan(tmp_path / "one", {PROJECT_SETTINGS: one_way})
+    second = scan(tmp_path / "two", {PROJECT_SETTINGS: the_other})
+
+    assert first.hooks[0].declaration_digest == second.hooks[0].declaration_digest
+
+
+def test_reordering_the_actions_of_a_declaration_changes_its_digest(tmp_path: Path) -> None:
+    """The actions run in the order they are written, so their order is part of what is
+    declared and a reordering is drift rather than noise."""
+    one, other = '{"command": "a.sh"}', '{"command": "b.sh"}'
+    first = scan(tmp_path / "one", {PROJECT_SETTINGS: declaring(f'{{"hooks": [{one}, {other}]}}')})
+    second = scan(tmp_path / "two", {PROJECT_SETTINGS: declaring(f'{{"hooks": [{other}, {one}]}}')})
+
+    assert first.hooks[0].declaration_digest != second.hooks[0].declaration_digest
+
+
+def test_a_repeated_property_name_outside_the_hooks_member_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    """RFC 8785 constrains what is canonicalised. Configuration that is not a hook is never
+    canonicalised, so how the runtime resolves a repeat there is the runtime's business."""
+    discovery = scan(
+        tmp_path,
+        {PROJECT_SETTINGS: '{"model": "a", "model": "b", "hooks": {"Stop": [{"matcher": ""}]}}'},
+    )
+
+    assert codes(discovery) == []
+    assert len(discovery.hooks) == 1

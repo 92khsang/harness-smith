@@ -1,4 +1,4 @@
-"""Canonical JSON and the fingerprint taken over it, per RFC 8785 (JCS).
+"""Canonical JSON and the Declaration Digest taken over it, per RFC 8785 (JCS).
 
 A hook declaration has no stable identity, only a Locator: a containing file and a JSON
 Pointer. Recognising the same declaration after it moves therefore needs a value the
@@ -29,7 +29,7 @@ import hashlib
 import math
 from collections.abc import Mapping
 
-__all__ = ["CanonicalisationError", "canonicalise", "fingerprint"]
+__all__ = ["CanonicalisationError", "canonicalise", "declaration_digest"]
 
 # ECMAScript switches to exponential notation outside this range of decimal point positions.
 MAX_PLAIN_EXPONENT = 21
@@ -53,9 +53,14 @@ def canonicalise(value: object) -> bytes:
         raise CanonicalisationError(f"the value holds text JSON cannot encode: {error}") from error
 
 
-def fingerprint(value: object) -> str:
-    """The SHA-256 of ``value``'s canonical bytes, as lowercase hexadecimal."""
-    return hashlib.sha256(canonicalise(value)).hexdigest()
+def declaration_digest(declaration: object) -> str:
+    """The Declaration Digest of ``declaration``: the lowercase SHA-256 of its canonical bytes.
+
+    Section 3.1 requires the input to carry no duplicate property names. A mapping cannot
+    report its own repeats, so a caller reading a declaration off disk establishes that before
+    calling -- ``json_document.repeated_names`` is what records it.
+    """
+    return hashlib.sha256(canonicalise(declaration)).hexdigest()
 
 
 def _serialise(value: object) -> str:

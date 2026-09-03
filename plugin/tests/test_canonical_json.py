@@ -13,7 +13,11 @@ import struct
 
 import pytest
 
-from harness_smith.canonical_json import CanonicalisationError, canonicalise, fingerprint
+from harness_smith.canonical_json import (
+    CanonicalisationError,
+    canonicalise,
+    declaration_digest,
+)
 
 # RFC 8785, Section 3.2.2, the "string" member. The RFC writes its twelve code points as
 # \u20ac$\u000F\u000aA'\u0042\u0022\u005c\\\"\/
@@ -168,24 +172,24 @@ def test_a_value_json_has_no_representation_for_is_refused() -> None:
         canonicalise({"command": object()})
 
 
-def test_the_fingerprint_is_the_sha_256_of_the_canonical_bytes() -> None:
+def test_the_digest_is_the_sha_256_of_the_canonical_bytes() -> None:
     declaration = {"matcher": "Write", "hooks": [{"type": "command", "command": "fmt.sh"}]}
 
     expected = hashlib.sha256(canonicalise(declaration)).hexdigest()
 
-    assert fingerprint(declaration) == expected
+    assert declaration_digest(declaration) == expected
 
 
-def test_two_declarations_differing_only_in_key_order_share_a_fingerprint() -> None:
+def test_two_declarations_differing_only_in_key_order_share_a_digest() -> None:
     written_one_way = json.loads('{"matcher":"Write","hooks":[{"type":"command"}]}')
     written_the_other = json.loads('{"hooks":[{"type":"command"}],"matcher":"Write"}')
 
-    assert fingerprint(written_one_way) == fingerprint(written_the_other)
+    assert declaration_digest(written_one_way) == declaration_digest(written_the_other)
 
 
-def test_reordering_the_commands_of_a_declaration_changes_its_fingerprint() -> None:
+def test_reordering_the_commands_of_a_declaration_changes_its_digest() -> None:
     """Array order is execution order, so a reordered hooks array is a different declaration."""
     first = {"hooks": [{"command": "a.sh"}, {"command": "b.sh"}]}
     second = {"hooks": [{"command": "b.sh"}, {"command": "a.sh"}]}
 
-    assert fingerprint(first) != fingerprint(second)
+    assert declaration_digest(first) != declaration_digest(second)

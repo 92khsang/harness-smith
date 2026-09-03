@@ -4,21 +4,22 @@ An Artifact Container holds artifacts addressed by pointer rather than by path, 
 file has to be read before any pointer into it means anything, and a read that fails leaves
 nothing addressable behind.
 
-The file layer and the JSON layer fail separately, and the state says which, so a caller that
-answers them differently never has to read the reason to find out. Within the JSON layer the
-reason says whether the text was not JSON at all or was JSON of the wrong shape. Nothing
-branches on that second difference, because neither case leaves a member to point at.
+Three things can fail, and they are kept apart because each answers to its own finding and its
+own fix: the file's bytes never became text, the text is not JSON, or the JSON is not an
+object and so holds no members to point at. A caller chooses on the state rather than by
+reading the reason.
 
 What counts as JSON here is RFC 8259, not what Python's parser happens to allow. ``NaN`` and
-the infinities are refused because Section 6 does not permit them, and Python accepts them
-only as an extension. A leading byte order mark is ignored because Section 8.1 lets a parser
-ignore one rather than treat it as an error.
+the infinities are refused because Section 6 does not permit them and Python accepts them only
+as an extension. A leading byte order mark is ignored because Section 8.1 lets a parser ignore
+one rather than treat it as an error; whether the runtime's own reader does the same is
+unverified, so that is a parser policy chosen here and not a claim about Claude Code.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -27,8 +28,10 @@ __all__ = [
     "BYTE_ORDER_MARK",
     "JsonDocument",
     "JsonDocumentState",
+    "JsonObject",
     "parse_json_document",
     "read_json_document",
+    "repeated_names",
 ]
 
 BYTE_ORDER_MARK = "\ufeff"
@@ -36,12 +39,36 @@ BYTE_ORDER_MARK = "\ufeff"
 
 class JsonDocumentState(StrEnum):
     PARSED = "parsed"
-    INVALID = "invalid"
     FILE_UNREADABLE = "file-unreadable"
+    UNPARSEABLE = "unparseable"
+    NOT_AN_OBJECT = "not-an-object"
 
 
 class _UndefinedNumberError(ValueError):
     """A literal Python's parser accepts and JSON does not define."""
+
+
+class JsonObject(dict[str, object]):
+    """A parsed JSON object that remembers which of its property names repeated.
+
+    RFC 8259 says names within an object SHOULD be unique and leaves a repeat to the parser;
+    this one keeps the last value, as the runtime's does. RFC 8785 is stricter -- Section 3.1
+    forbids duplicate property names in canonicalisation input -- and once a repeat has
+    collapsed into a mapping no later reader can tell that it happened, which makes the parser
+    the only place it can be recorded.
+    """
+
+    repeated_names: tuple[str, ...]
+
+    def __init__(self, pairs: list[tuple[str, object]]) -> None:
+        super().__init__(pairs)
+        seen: set[str] = set()
+        repeated: list[str] = []
+        for name, _ in pairs:
+            if name in seen and name not in repeated:
+                repeated.append(name)
+            seen.add(name)
+        self.repeated_names = tuple(repeated)
 
 
 @dataclass(frozen=True)
@@ -57,9 +84,14 @@ class JsonDocument:
         return cls(JsonDocumentState.PARSED, members, "")
 
     @classmethod
-    def invalid(cls, reason: str) -> JsonDocument:
-        """The text is there and does not read as a JSON object of members."""
-        return cls(JsonDocumentState.INVALID, {}, reason)
+    def unparseable(cls, reason: str) -> JsonDocument:
+        """The text is there and is not JSON."""
+        return cls(JsonDocumentState.UNPARSEABLE, {}, reason)
+
+    @classmethod
+    def not_an_object(cls, reason: str) -> JsonDocument:
+        """The text is JSON, of a shape that holds no members to point at."""
+        return cls(JsonDocumentState.NOT_AN_OBJECT, {}, reason)
 
     @classmethod
     def file_unreadable(cls, reason: str) -> JsonDocument:
@@ -70,15 +102,19 @@ class JsonDocument:
 def parse_json_document(text: str) -> JsonDocument:
     """Read ``text``, which is a whole JSON file."""
     try:
-        loaded = json.loads(text.removeprefix(BYTE_ORDER_MARK), parse_constant=_refuse)
+        loaded = json.loads(
+            text.removeprefix(BYTE_ORDER_MARK),
+            parse_constant=_refuse,
+            object_pairs_hook=JsonObject,
+        )
     except _UndefinedNumberError as error:
-        return JsonDocument.invalid(f"the file is not valid JSON: {error} is not a JSON number")
+        return JsonDocument.unparseable(f"the file is not valid JSON: {error} is not a number")
     except json.JSONDecodeError as error:
-        return JsonDocument.invalid(
+        return JsonDocument.unparseable(
             f"the file is not valid JSON: {error.msg}, at line {error.lineno} column {error.colno}"
         )
     if not isinstance(loaded, dict):
-        return JsonDocument.invalid(f"the file is a JSON {_shape(loaded)}, not an object")
+        return JsonDocument.not_an_object(f"the file is a JSON {_shape(loaded)}, not an object")
     members: dict[str, object] = loaded
     return JsonDocument.parsed(members)
 
@@ -98,6 +134,25 @@ def read_json_document(path: Path) -> JsonDocument:
             f"the file could not be read: {error.strerror or 'unknown error'}"
         )
     return parse_json_document(text)
+
+
+def repeated_names(value: object) -> tuple[str, ...]:
+    """Every property name that repeated in ``value``, or anywhere nested inside it.
+
+    ``value`` is a subtree this module parsed. A mapping built anywhere else carries no record
+    of its own repeats and reads as having none.
+    """
+    if isinstance(value, JsonObject):
+        return value.repeated_names + _nested(value.values())
+    if isinstance(value, dict):
+        return _nested(value.values())
+    if isinstance(value, list):
+        return _nested(value)
+    return ()
+
+
+def _nested(values: Iterable[object]) -> tuple[str, ...]:
+    return tuple(name for member in values for name in repeated_names(member))
 
 
 def _refuse(literal: str) -> object:

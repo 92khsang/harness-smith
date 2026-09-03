@@ -87,7 +87,15 @@ def _registry() -> dict[str, DiagnosticSpec]:
         ),
         "HS-RULE-ID-DUPLICATE": (error_1, "Rename one"),
         # Hooks
-        "HS-HOOK-CONTAINER-UNPARSEABLE": (error_1, "Fix the file"),
+        "HS-HOOK-CONTAINER-FILE-UNREADABLE": (
+            error_1,
+            "Make the container readable UTF-8 text, then rerun",
+        ),
+        "HS-HOOK-CONTAINER-UNPARSEABLE": (error_1, "Fix the JSON syntax"),
+        "HS-HOOK-CONTAINER-INVALID": (
+            error_1,
+            "Correct the hook container's structure, or the declaration value it holds",
+        ),
         "HS-HOOK-LOCATOR-UNRESOLVED": (
             error_1,
             "Restore the declaration, or remove the lock entry through `artifact-manage`",

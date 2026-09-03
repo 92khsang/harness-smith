@@ -52,6 +52,10 @@ _Avoid_: surface (reserved for scope boundaries), config file
 Where an Artifact is found right now: a path, or a path and a pointer into an Artifact Container. A Locator is a position, not an identity, and may change without the Artifact changing.
 _Avoid_: id, identity, address
 
+**Declaration Digest**:
+The lowercase SHA-256 of the RFC 8785 canonical bytes of one declaration held in an Artifact Container, taken over that declaration alone. It recognises a lock-tracked Hook that moved within its container, is a different measurement from a digest of the containing file, and is never serialised into a Discovery Report.
+_Avoid_: fingerprint, hook hash, file digest
+
 **Runtime Adapter**:
 The mapping from one agent runtime's own layout and loading rules to this project's artifact model. v1 has exactly one, for Claude Code.
 _Avoid_: backend, driver, provider

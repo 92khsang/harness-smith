@@ -1,8 +1,9 @@
 """The JSON container reader at its own contract.
 
 An Artifact Container is read before anything inside it can be addressed, so the cases below
-are the ways that read can fail: bytes that never became text, text that is not JSON, and JSON
-that is not an object and therefore holds no members to point at.
+are the three ways that read can fail: bytes that never became text, text that is not JSON,
+and JSON that is not an object and therefore holds no members to point at. Each is its own
+state, because each answers to its own finding.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from harness_smith.json_document import (
     JsonDocumentState,
     parse_json_document,
     read_json_document,
+    repeated_names,
 )
 
 
@@ -44,19 +46,19 @@ def test_an_empty_object_is_parsed_rather_than_treated_as_absent() -> None:
         ("nothing at all", ""),
     ],
 )
-def test_text_that_is_not_json_is_invalid_and_says_where(name: str, text: str) -> None:
+def test_text_that_is_not_json_is_unparseable_and_says_where(name: str, text: str) -> None:
     document = parse_json_document(text)
 
-    assert document.state is JsonDocumentState.INVALID, name
+    assert document.state is JsonDocumentState.UNPARSEABLE, name
     assert "line" in document.reason
 
 
 @pytest.mark.parametrize("text", ["NaN", '{"timeout": NaN}', '{"timeout": Infinity}'])
-def test_a_number_json_does_not_define_is_invalid(text: str) -> None:
+def test_a_number_json_does_not_define_is_unparseable(text: str) -> None:
     """Python's parser accepts these by default; the runtime's does not, so neither does this."""
     document = parse_json_document(text)
 
-    assert document.state is JsonDocumentState.INVALID
+    assert document.state is JsonDocumentState.UNPARSEABLE
     assert "NaN" in document.reason or "Infinity" in document.reason
 
 
@@ -66,7 +68,7 @@ def test_a_number_json_does_not_define_is_invalid(text: str) -> None:
 def test_json_that_is_not_an_object_holds_no_members_to_address(shape: str, text: str) -> None:
     document = parse_json_document(text)
 
-    assert document.state is JsonDocumentState.INVALID
+    assert document.state is JsonDocumentState.NOT_AN_OBJECT
     assert shape in document.reason
 
 
@@ -113,3 +115,30 @@ def test_a_file_that_reads_is_parsed(tmp_path: Path) -> None:
     path.write_text('{"hooks": {"Stop": []}}', encoding="utf-8")
 
     assert read_json_document(path).members == {"hooks": {"Stop": []}}
+
+
+def test_a_repeated_property_name_is_recorded_even_though_the_last_value_wins() -> None:
+    """RFC 8785 Section 3.1 forbids duplicates in canonicalisation input, and the repeat is
+    gone once the object is a mapping, so the parser is the only place it can be seen."""
+    document = parse_json_document('{"model": "a", "model": "b", "other": 1}')
+
+    assert document.members == {"model": "b", "other": 1}
+    assert repeated_names(document.members) == ("model",)
+
+
+def test_a_repeated_name_is_found_however_deeply_it_is_nested() -> None:
+    document = parse_json_document('{"hooks": {"Stop": [{"matcher": "a", "matcher": "b"}]}}')
+
+    assert repeated_names(document.members) == ("matcher",)
+    assert repeated_names(document.members["hooks"]) == ("matcher",)
+
+
+def test_an_object_whose_names_are_unique_repeats_nothing() -> None:
+    document = parse_json_document('{"hooks": {"Stop": [{"matcher": "a", "timeout": 1}]}}')
+
+    assert repeated_names(document.members) == ()
+
+
+def test_a_mapping_this_module_did_not_parse_reports_no_repeats() -> None:
+    """It carries no record of its own repeats, and inventing one would be a guess."""
+    assert repeated_names({"model": "b"}) == ()
