@@ -9,6 +9,7 @@ other two discovery layers and belong to neither.
 
 from __future__ import annotations
 
+from harness_smith.adapters.claude_code.plugin import discover_plugin
 from harness_smith.adapters.claude_code.repository import discover
 
-__all__ = ["discover"]
+__all__ = ["discover", "discover_plugin"]
