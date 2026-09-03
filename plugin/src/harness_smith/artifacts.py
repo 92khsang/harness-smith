@@ -19,6 +19,7 @@ from enum import StrEnum
 from harness_smith.diagnostics import Diagnostic
 
 __all__ = [
+    "AUTHORITY_SCOPES",
     "LAYER_BY_CONTAINER_KIND",
     "SCOPE_BY_LAYER",
     "Activation",
@@ -91,6 +92,9 @@ class Provenance(StrEnum):
     GENERATED = "generated"
     IMPORTED = "imported"
     ADOPTED = "adopted"
+
+
+AUTHORITY_SCOPES: frozenset[Scope] = frozenset({Scope.REPOSITORY, Scope.PLUGIN})
 
 
 class ManagementAuthority(StrEnum):
@@ -249,6 +253,17 @@ class InventoriedArtifact:
     harness_relevant: bool
     sets: tuple[GovernanceSet, ...]
 
+    def __post_init__(self) -> None:
+        """Authority applies exactly where mutation is conceivable. Outside repository and
+        plugin scope there is nobody here to hold it, and ``unknown`` is not that: it is one of
+        the four answers, the one that refuses mutation until somebody classifies the artifact.
+        Saying it where the question does not arise would be a fifth value spelled as one of
+        the four."""
+        applies = self.scope in AUTHORITY_SCOPES
+        if (self.management_authority is not None) is not applies:
+            held = "holds an authority" if applies else "holds none"
+            raise ValueError(f"an artifact in {self.scope.value} scope {held}")
+
     @classmethod
     def runtime_native(
         cls,
@@ -263,10 +278,11 @@ class InventoriedArtifact:
         Discovery establishes location, type, Scope and Representation. Provenance is authored
         until a lock records otherwise; every location scanned this way is one the runtime
         loads from, so the artifact is harness-relevant and Inventoried by construction.
-        Management Authority reads as ``unknown`` because resolving it needs the manifest, the
-        lock and Writer evidence that discovery never opens, and ``unknown`` refuses mutation,
-        which is the safe answer to give before classification runs. Classification computes
-        the authority and the remaining governance sets.
+        Management Authority reads as ``unknown`` where it applies at all, because resolving it
+        needs the manifest, the lock and Writer evidence that discovery never opens, and
+        ``unknown`` refuses mutation, which is the safe answer to give before classification
+        runs. Outside repository and plugin scope it does not apply and is null. Classification
+        computes the authority and the remaining governance sets.
 
         Activation is unknown either way, and the cause says what was not read. Nothing was
         read of the runtime by default, which is ``runtime-state-not-read``; a scan given
@@ -285,7 +301,9 @@ class InventoriedArtifact:
             scope=scope,
             representation=representation,
             provenance=Provenance.AUTHORED,
-            management_authority=ManagementAuthority.UNKNOWN,
+            management_authority=(
+                ManagementAuthority.UNKNOWN if scope in AUTHORITY_SCOPES else None
+            ),
             activation=Activation.UNKNOWN,
             activation_cause=activation_cause,
             harness_relevant=True,

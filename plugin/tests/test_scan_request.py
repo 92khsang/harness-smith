@@ -51,13 +51,12 @@ def test_a_request_without_runtime_evidence_says_nobody_asked() -> None:
     assert request.plugin_roots == ()
 
 
-def test_a_collected_snapshot_that_found_nothing_is_not_the_same_as_no_snapshot() -> None:
-    request = DiscoveryRequest(
-        repository_root=Path("/repository"), runtime_evidence=RuntimeEvidenceSnapshot()
-    )
-
-    assert request.runtime_evidence == RuntimeEvidenceSnapshot()
-    assert request.runtime_evidence is not None
+def test_a_snapshot_with_nowhere_in_it_is_refused() -> None:
+    """A collector that fell over would otherwise hand back what a collector that ran and found
+    a clean machine hands back, and asking for runtime evidence would become the same as not
+    asking."""
+    with pytest.raises(ValueError, match="looked somewhere"):
+        RuntimeEvidenceSnapshot(requested=())
 
 
 def test_plugin_roots_are_a_product_input_rather_than_runtime_evidence() -> None:
@@ -300,8 +299,12 @@ def test_a_place_answered_twice_is_refused() -> None:
 
 
 def test_a_place_answered_for_and_never_requested_is_refused() -> None:
+    other = "/repository/.claude/settings.local.json"
+
     with pytest.raises(ValueError, match="never requested"):
-        RuntimeEvidenceSnapshot(documents=(document(),))
+        RuntimeEvidenceSnapshot(
+            requested=(USER_TARGET,), documents=(document(), local_document(other))
+        )
 
 
 def test_an_answer_describing_a_different_kind_of_place_is_refused() -> None:
@@ -314,7 +317,9 @@ def test_an_answer_describing_a_different_kind_of_place_is_refused() -> None:
 
 def test_a_drop_in_needs_the_directory_that_lists_it() -> None:
     with pytest.raises(ValueError, match="without the directory that lists it"):
-        RuntimeEvidenceSnapshot(documents=(dropin("10-a.json"),))
+        RuntimeEvidenceSnapshot(
+            requested=(USER_TARGET,), documents=(document(), dropin("10-a.json"))
+        )
 
 
 def test_every_entry_the_runtime_would_read_has_been_read() -> None:

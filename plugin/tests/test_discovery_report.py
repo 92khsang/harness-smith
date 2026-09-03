@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from harness_smith.artifacts import (
+    Activation,
     ArtifactContainer,
     ArtifactType,
     CapabilityPolicy,
@@ -19,6 +20,8 @@ from harness_smith.artifacts import (
     ContainerKind,
     DiscoveryReport,
     InventoriedArtifact,
+    ManagementAuthority,
+    Provenance,
     Representation,
     RuntimeComponentObservation,
     Scope,
@@ -234,3 +237,34 @@ def test_a_container_in_another_scope_does_not_satisfy_a_hold() -> None:
 def test_an_artifact_addressed_by_a_pointer_is_held_by_something() -> None:
     with pytest.raises(ValueError, match="addressed by a pointer into nothing"):
         DiscoveryReport(artifacts=(held_hook(Scope.REPOSITORY, f"{SHARED}#/hooks/Stop/0"),))
+
+
+def artifact_with(scope: Scope, authority: ManagementAuthority | None) -> InventoriedArtifact:
+    return InventoriedArtifact(
+        locator=SHARED,
+        type=ArtifactType.HOOK,
+        scope=scope,
+        representation=Representation.FILE,
+        provenance=Provenance.AUTHORED,
+        management_authority=authority,
+        activation=Activation.UNKNOWN,
+        activation_cause=None,
+        harness_relevant=True,
+        sets=(),
+    )
+
+
+@pytest.mark.parametrize("scope", [Scope.USER_GLOBAL, Scope.EXTERNAL, Scope.MANAGED_POLICY])
+def test_an_artifact_outside_repository_and_plugin_scope_holds_no_authority(
+    scope: Scope,
+) -> None:
+    """`unknown` is one of the four answers, the one that refuses mutation. Saying it where
+    nobody holds authority at all would be a fifth value spelled as one of the four."""
+    with pytest.raises(ValueError, match="holds none"):
+        artifact_with(scope, ManagementAuthority.UNKNOWN)
+
+
+@pytest.mark.parametrize("scope", [Scope.REPOSITORY, Scope.PLUGIN])
+def test_an_artifact_where_mutation_is_conceivable_holds_one(scope: Scope) -> None:
+    with pytest.raises(ValueError, match="holds an authority"):
+        artifact_with(scope, None)

@@ -36,6 +36,7 @@ from harness_smith.artifacts import (
     InventoriedArtifact,
     Representation,
 )
+from harness_smith.diagnostics import Diagnostic
 from harness_smith.json_document import parse_json_bytes
 from harness_smith.scan import (
     EvidenceDocument,
@@ -43,6 +44,7 @@ from harness_smith.scan import (
     EvidenceStatus,
     RuntimeEvidenceSnapshot,
 )
+from harness_smith.vocabulary import Subject, SubjectKind
 
 __all__ = ["discover_evidence"]
 
@@ -62,6 +64,7 @@ class _Read:
     container: ArtifactContainer
     artifacts: tuple[InventoriedArtifact, ...] = ()
     hooks: tuple[HookDeclaration, ...] = ()
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 def discover_evidence(snapshot: RuntimeEvidenceSnapshot) -> Discovery:
@@ -72,13 +75,18 @@ def discover_evidence(snapshot: RuntimeEvidenceSnapshot) -> Discovery:
             artifacts=tuple(entry for read in reads for entry in read.artifacts),
             containers=tuple(read.container for read in reads),
         ),
+        diagnostics=tuple(entry for read in reads for entry in read.diagnostics),
         hooks=tuple(entry for read in reads for entry in read.hooks),
     )
 
 
 def _observed(document: EvidenceDocument) -> bool:
-    """A source that was absent declares nothing. One that was there and could not be read is
-    a container whose contents are unknown, which is not the same as an empty one."""
+    """A source that was absent declares nothing. One the collector could not read is a
+    container whose contents are unknown, which is not the same as an empty one; that failure
+    is the collector's to explain, and a run that asked for it projects the uncertainty.
+
+    A source the collector did read, whose bytes or structure this scan then finds wrong, is
+    this scan's to report: the content is in hand and the fault is in it."""
     return document.status in {EvidenceStatus.PRESENT, EvidenceStatus.UNREADABLE}
 
 
@@ -88,6 +96,11 @@ def _read(document: EvidenceDocument) -> _Read:
     found = hook_container.read(
         parse_json_bytes(document.content), document.locator, document.scope
     )
+    if found.code:
+        finding = Diagnostic.of(
+            found.code, Subject(SubjectKind.CONTAINER, document.locator), message=found.reason
+        )
+        return _Read(_container(document, ()), diagnostics=(finding,))
     artifacts = tuple(
         InventoriedArtifact.runtime_native(
             declaration.locator,

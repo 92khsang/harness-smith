@@ -176,13 +176,21 @@ class RuntimeEvidenceSnapshot:
 
     Which places those are is the collector's to decide, because it is the one that knows this
     runtime and this platform. Nothing here derives a location.
+
+    A snapshot with no places in it is refused. A collector that fell over would otherwise hand
+    back the same value as one that ran and found a clean machine, and asking for runtime
+    evidence would quietly become the same as not asking. A platform where a source cannot be
+    observed says so with a target and an ``unsupported`` observation, and a machine with
+    nothing on it says so with a target and an ``absent`` one.
     """
 
-    requested: tuple[EvidenceTarget, ...] = ()
+    requested: tuple[EvidenceTarget, ...]
     documents: tuple[EvidenceDocument, ...] = ()
     directories: tuple[EvidenceDirectory, ...] = ()
 
     def __post_init__(self) -> None:
+        if not self.requested:
+            raise ValueError("a collection that ran looked somewhere, and says where")
         _every_target_answered(self.requested, self.documents, self.directories)
         _dropins_belong_to_their_directory(self.documents, self.directories)
 

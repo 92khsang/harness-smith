@@ -90,11 +90,23 @@ def test_the_same_repository_answers_the_same_whatever_the_machine_holds(
     assert report(root) == before
 
 
-def test_an_empty_snapshot_is_not_the_same_request_as_no_snapshot(tmp_path: Path) -> None:
-    """A collected snapshot that found nothing and a run that never asked are different
-    requests, whatever they currently produce."""
+def test_a_collection_that_found_nothing_is_not_a_run_that_never_asked(tmp_path: Path) -> None:
+    """A machine with nothing on it says so, place by place. It is a different request from a
+    run that never looked, and both produce the same report here."""
     root = repository(tmp_path)
-    asked = DiscoveryRequest(repository_root=root, runtime_evidence=RuntimeEvidenceSnapshot())
+    absent = EvidenceDocument(
+        source=EvidenceSource.USER_SETTINGS,
+        scope=Scope.USER_GLOBAL,
+        settings_layer=SettingsLayer.USER,
+        locator=USER_LOCATOR,
+        status=EvidenceStatus.ABSENT,
+    )
+    asked = DiscoveryRequest(
+        repository_root=root,
+        runtime_evidence=RuntimeEvidenceSnapshot(
+            requested=(user_target(USER_LOCATOR),), documents=(absent,)
+        ),
+    )
     never = DiscoveryRequest(repository_root=root)
 
     assert asked != never
