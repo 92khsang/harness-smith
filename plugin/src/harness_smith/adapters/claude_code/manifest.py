@@ -27,17 +27,29 @@ The merge semantics are the runtime's, from https://code.claude.com/docs/en/plug
 
   Discovery locates; it does not resolve a name collision between two locations, so the
   precedence above is recorded rather than applied
-- ``themes`` and ``monitors`` are read under ``experimental`` and at the top level, because the
-  documentation says the top-level spelling still works while ``experimental.*`` becomes
-  required, and does not say which wins when a manifest carries both. ``monitors`` **replaces**
-  the default: "When omitted, ``monitors/monitors.json`` at the plugin root is loaded if
-  present"
+- ``themes`` and ``monitors`` are read under ``experimental`` first and at the top level only
+  as a fallback, because the loader coalesces them that way: ``experimental?.themes ?? themes``
+  and ``experimental?.monitors ?? monitors``. A manifest carrying both loads the experimental
+  one alone. ``monitors`` **replaces** the default: "When omitted,
+  ``monitors/monitors.json`` at the plugin root is loaded if present"
 
 A field that accepts an inline declaration holds the component in the manifest rather than at a
-path of its own, and the shape that declares one differs by field: ``hooks``, ``mcpServers`` and
-``lspServers`` take an object, ``monitors`` takes the monitors array itself. Any of them may
-also arrive as a list mixing paths with inline entries. Every other field takes a path or a list
-of them, so an object or an array of objects there declares no location at all.
+path of its own, and the shape that declares one differs by field:
+
+- ``hooks``, ``mcpServers`` and ``lspServers`` take an object, and their lists may mix paths
+  with inline objects
+- ``monitors`` takes the monitors array itself, so a list there is never a list of paths. The
+  validator refuses ``["./monitors.json"]`` and any list mixing paths with entries, so neither
+  declares a location
+- ``mcpServers`` also takes a URL naming a remote MCPB bundle. The bundle is not in the plugin,
+  so the component is located where it is declared, at the manifest
+- ``commands`` takes an object mapping command names to definitions. A definition's ``source``
+  names a Markdown file and resolves like any other path. A definition's ``content`` writes the
+  command out in the manifest instead, which makes it an artifact addressed by a pointer into
+  the manifest; that is not discovered here, and #35 owns it
+
+Every other field takes a path or a list of them, so an object or an array of objects there
+declares no location at all.
 
 Every path must be relative to the plugin root and start with ``./``, and ``skills`` alone also
 accepts ``"."``; both spellings denote the plugin root. A declared path that is inside the root
@@ -59,6 +71,7 @@ place.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -73,6 +86,14 @@ __all__ = ["MANIFEST", "Component", "Merge", "Resolution", "resolve"]
 
 MANIFEST = ".claude-plugin/plugin.json"
 EXPERIMENTAL_MEMBER = "experimental"
+
+# A command definition names its Markdown file here; a definition that writes the command out in
+# the manifest instead is addressed by a pointer into it, which #35 owns.
+DEFINITION_SOURCE = "source"
+
+# A declared value carrying a scheme names something outside the plugin, such as the remote MCPB
+# bundle `mcpServers` accepts. It is not a path in the plugin, so it resolves to no Locator there.
+REMOTE_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://")
 
 # The plugin root, as a location and as the Locator of the Surface a manifest finding is about.
 PLUGIN_ROOT = "."
@@ -114,11 +135,13 @@ class ComponentSpec:
     merge: Merge
     experimental: bool = False
     inline: Inline = Inline.NONE
+    definitions: bool = False
+    remote: bool = False
 
 
 SPECS: Mapping[Component, ComponentSpec] = {
     Component.SKILLS: ComponentSpec("skills", Merge.KEEPS_DEFAULT),
-    Component.COMMANDS: ComponentSpec("commands", Merge.REPLACES),
+    Component.COMMANDS: ComponentSpec("commands", Merge.REPLACES, definitions=True),
     Component.AGENTS: ComponentSpec("agents", Merge.REPLACES),
     Component.WORKFLOWS: ComponentSpec("workflows", Merge.REPLACES),
     Component.OUTPUT_STYLES: ComponentSpec("output-styles", Merge.REPLACES),
@@ -127,7 +150,9 @@ SPECS: Mapping[Component, ComponentSpec] = {
         "monitors/monitors.json", Merge.REPLACES, experimental=True, inline=Inline.ARRAY
     ),
     Component.HOOKS: ComponentSpec("hooks/hooks.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT),
-    Component.MCP_SERVERS: ComponentSpec(".mcp.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT),
+    Component.MCP_SERVERS: ComponentSpec(
+        ".mcp.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT, remote=True
+    ),
     Component.LSP_SERVERS: ComponentSpec(".lsp.json", Merge.KEEPS_DEFAULT, inline=Inline.OBJECT),
 }
 
@@ -146,27 +171,36 @@ class Resolution:
 
 @dataclass(frozen=True)
 class _Declaration:
-    """What the manifest said about one component."""
+    """What the manifest said about one component, once the winning key has been read."""
 
     present: bool = False
     paths: tuple[str, ...] = ()
     inline: bool = False
+    ambiguous: bool = False
+
+
+@dataclass(frozen=True)
+class _Source:
+    """The one key that decides a component's location, and whether it can be read at all."""
+
+    present: bool = False
+    value: object = None
+    ambiguous: bool = False
 
 
 def resolve(root: Path) -> Resolution:
     """Resolve every component's locations against the manifest at ``root``."""
     document = read_json_document(root / MANIFEST)
     members = document.members if document.state is JsonDocumentState.PARSED else {}
-    ambiguous = _ambiguous(members)
     locations: dict[Component, tuple[str, ...]] = {}
     diagnostics: list[Diagnostic] = []
 
     for component, spec in SPECS.items():
-        if component in ambiguous:
+        declared = _declaration(members, component, spec)
+        if declared.ambiguous:
             diagnostics.append(_ambiguity(component))
             locations[component] = _kept_default(spec)
             continue
-        declared = _declaration(members, component, spec)
         resolved: list[str] = []
         for path in declared.paths:
             inside = _inside(root, path)
@@ -198,44 +232,84 @@ def _kept_default(spec: ComponentSpec) -> tuple[str, ...]:
 def _declaration(
     members: Mapping[str, object], component: Component, spec: ComponentSpec
 ) -> _Declaration:
-    """What ``members`` declares for one component, under every key the runtime accepts.
+    """What ``members`` declares for one component, read at the shapes the field accepts.
 
     A value of a shape the field does not accept declares no location. Its shape is the
     official validator's question, and the key still counts as declared.
-
-    A list holds paths, and holds inline entries where the field takes an inline declaration at
-    all: that is how ``monitors`` carries the monitors array itself, and how ``hooks`` carries
-    a mixture of additional hook files and hooks written out in place.
     """
-    present = False
-    paths: list[str] = []
-    inline = False
-    for value in _declared_values(members, component, spec):
-        present = True
-        if isinstance(value, str):
-            paths.append(value)
-        elif isinstance(value, list):
-            paths.extend(entry for entry in value if isinstance(entry, str))
-            inline = inline or (spec.inline is not Inline.NONE and _holds_object(value))
-        elif isinstance(value, dict) and spec.inline is Inline.OBJECT:
-            inline = True
-    return _Declaration(present, tuple(paths), inline)
+    source = _source(members, component, spec)
+    if not source.present or source.ambiguous:
+        return _Declaration(source.present, ambiguous=source.ambiguous)
+    value = source.value
+    if isinstance(value, list):
+        return _from_list(spec, value)
+    if isinstance(value, dict):
+        paths = _definition_paths(value) if spec.definitions else ()
+        return _Declaration(True, paths, spec.inline is Inline.OBJECT)
+    if isinstance(value, str):
+        if spec.remote and _remote(value):
+            return _Declaration(True, inline=True)
+        return _Declaration(True, (value,))
+    return _Declaration(True)
 
 
-def _holds_object(value: list[object]) -> bool:
-    return any(isinstance(entry, dict) for entry in value)
+def _from_list(spec: ComponentSpec, value: list[object]) -> _Declaration:
+    """A list of paths, or the inline declaration a list itself can be.
+
+    Where a field takes the inline component as an array, a list is that array and never a list
+    of paths: the validator refuses a list of path strings there, and refuses one mixing paths
+    with entries, so neither declares a location.
+    """
+    if spec.inline is Inline.ARRAY:
+        return _Declaration(True, inline=all(isinstance(entry, dict) for entry in value))
+    paths = tuple(entry for entry in value if isinstance(entry, str))
+    holds_object = any(isinstance(entry, dict) for entry in value)
+    return _Declaration(True, paths, spec.inline is Inline.OBJECT and holds_object)
 
 
-def _declared_values(
-    members: Mapping[str, object], component: Component, spec: ComponentSpec
-) -> list[object]:
-    values = [members[component.value]] if component.value in members else []
-    if not spec.experimental:
-        return values
-    experimental = members.get(EXPERIMENTAL_MEMBER)
-    if isinstance(experimental, dict) and component.value in experimental:
-        values.append(experimental[component.value])
-    return values
+def _definition_paths(definitions: Mapping[str, object]) -> tuple[str, ...]:
+    """The Markdown files a command-definition map names.
+
+    A definition that writes its command out in the manifest instead of naming a file is an
+    artifact addressed by a pointer into the manifest, which #35 owns; it names no path here.
+    """
+    found = []
+    for definition in definitions.values():
+        if not isinstance(definition, dict):
+            continue
+        source = definition.get(DEFINITION_SOURCE)
+        if isinstance(source, str):
+            found.append(source)
+    return tuple(found)
+
+
+def _source(members: Mapping[str, object], component: Component, spec: ComponentSpec) -> _Source:
+    """The one key the runtime reads a component's location from.
+
+    An experimental component is coalesced, ``experimental?.<key> ?? <key>``, so declaring the
+    experimental key makes the top-level one dead rather than additional. Whether the key
+    repeated is asked of the key that wins, because a repeat only matters where it decides.
+    """
+    key = component.value
+    if spec.experimental:
+        if EXPERIMENTAL_MEMBER in own_repeated_names(members):
+            return _Source(present=True, ambiguous=True)
+        experimental = members.get(EXPERIMENTAL_MEMBER)
+        if isinstance(experimental, dict) and key in experimental:
+            if key in own_repeated_names(experimental):
+                return _Source(present=True, ambiguous=True)
+            return _Source(present=True, value=experimental[key])
+    if key not in members:
+        return _Source()
+    if key in own_repeated_names(members):
+        return _Source(present=True, ambiguous=True)
+    return _Source(present=True, value=members[key])
+
+
+def _remote(declared: str) -> str | None:
+    """The scheme of a declared value that names something outside the plugin, if it has one."""
+    match = REMOTE_SCHEME.match(declared)
+    return match.group(0) if match else None
 
 
 def _root_skill(
@@ -296,22 +370,6 @@ def _finding(code: str, message: str, affected: Iterable[str] = ()) -> Diagnosti
     repair is named in the message, because a Surface is a scope boundary and not a file."""
     return Diagnostic.of(
         code, Subject(SubjectKind.SURFACE, PLUGIN_ROOT), message=message, affected=affected
-    )
-
-
-def _ambiguous(members: Mapping[str, object]) -> frozenset[Component]:
-    """The components whose key repeated, anywhere that decides where they are loaded from.
-
-    Which of two same-named members the runtime keeps is not recorded anywhere this project has
-    verified, so a repeat there is reported rather than resolved by picking one.
-    """
-    repeated = set(own_repeated_names(members))
-    inside = set(own_repeated_names(members.get(EXPERIMENTAL_MEMBER)))
-    return frozenset(
-        component
-        for component, spec in SPECS.items()
-        if component.value in repeated
-        or (spec.experimental and (EXPERIMENTAL_MEMBER in repeated or component.value in inside))
     )
 
 

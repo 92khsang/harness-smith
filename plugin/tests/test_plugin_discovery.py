@@ -537,10 +537,29 @@ def test_an_inline_monitor_array_is_located_at_the_manifest(
     assert ("monitors", MANIFEST) in observed(discovery)
 
 
+def test_a_monitors_path_locates_the_file_it_names(tmp_path: Path) -> None:
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", experimental={"monitors": "./config/monitors.json"}),
+            "config/monitors.json": "[]\n",
+        },
+    )
+
+    assert ("monitors", "config/monitors.json") in observed(discovery)
+    assert ("monitors", MANIFEST) not in observed(discovery)
+
+
 @pytest.mark.parametrize(
-    "declared", ["./config/monitors.json", ["./config/monitors.json"]], ids=["string", "list"]
+    "declared",
+    [["./config/monitors.json"], ["./config/monitors.json", MONITOR]],
+    ids=["paths", "mixed"],
 )
-def test_a_monitors_path_locates_the_file_it_names(tmp_path: Path, declared: object) -> None:
+def test_a_monitors_list_is_the_monitors_array_and_never_a_list_of_paths(
+    tmp_path: Path, declared: list[object]
+) -> None:
+    """`monitors` is a path string or the monitors array itself. The validator refuses a list of
+    paths and a list mixing paths with entries, so neither declares a location."""
     discovery = scan(
         tmp_path,
         {
@@ -549,8 +568,74 @@ def test_a_monitors_path_locates_the_file_it_names(tmp_path: Path, declared: obj
         },
     )
 
-    assert ("monitors", "config/monitors.json") in observed(discovery)
-    assert ("monitors", MANIFEST) not in observed(discovery)
+    assert components(discovery) == ["manifest"]
+
+
+@pytest.mark.parametrize("key", ["themes", "monitors"])
+def test_the_experimental_key_makes_the_top_level_one_dead_rather_than_additional(
+    tmp_path: Path, key: str
+) -> None:
+    """The loader coalesces the two, `experimental?.<key> ?? <key>`, so a manifest carrying both
+    loads the experimental one alone."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", experimental={key: "./new/"}, **{key: "./old/"}),
+            "new/entry.json": "{}\n",
+            "old/entry.json": "{}\n",
+        },
+    )
+
+    assert (key, "new") in observed(discovery)
+    assert (key, "old") not in observed(discovery)
+
+
+def test_a_repeat_in_the_key_that_lost_decides_nothing(tmp_path: Path) -> None:
+    """A repeat only matters where it decides. The experimental key wins outright, so a repeated
+    top-level one is dead text rather than an ambiguity."""
+    repeated = (
+        '{"name": "p", "themes": "./old/", "themes": "./older/", '
+        '"experimental": {"themes": "./new/"}}\n'
+    )
+
+    discovery = scan(tmp_path, {MANIFEST: repeated, "new/dracula.json": "{}\n"})
+
+    assert codes(discovery) == []
+    assert ("themes", "new") in observed(discovery)
+
+
+def test_a_command_definition_map_locates_the_markdown_each_definition_names(
+    tmp_path: Path,
+) -> None:
+    """`commands` also takes an object mapping command names to definitions, and a definition's
+    `source` names the Markdown file the command is written in."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(
+                name="p",
+                commands={
+                    "about": {"source": "./custom/about.md"},
+                    "inline": {"content": "Explain this plugin"},
+                },
+            ),
+            "custom/about.md": "# about\n",
+        },
+    )
+
+    assert locators(discovery, ArtifactType.SKILL) == ["custom/about.md"]
+    assert codes(discovery) == []
+
+
+def test_a_remote_bundle_is_located_where_it_is_declared(tmp_path: Path) -> None:
+    """`mcpServers` also takes a URL naming a remote MCPB bundle. The bundle is not in the
+    plugin, so the only Locator it has is the manifest that declares it."""
+    discovery = scan(
+        tmp_path,
+        {MANIFEST: manifest(name="p", mcpServers="https://example.com/server.mcpb")},
+    )
+
+    assert observed(discovery) == [("manifest", MANIFEST), ("mcpServers", MANIFEST)]
 
 
 def test_an_inline_component_declaration_is_observed_at_the_manifest(tmp_path: Path) -> None:
