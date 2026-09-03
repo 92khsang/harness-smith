@@ -17,6 +17,7 @@ is a projection made elsewhere, out of evidence this does not have.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from harness_smith.adapters.claude_code import hooks as hook_container
@@ -24,6 +25,7 @@ from harness_smith.artifacts import (
     ArtifactContainer,
     ArtifactType,
     ContainerFormat,
+    ContainerSource,
     Discovery,
     DiscoveryReport,
     HookDeclaration,
@@ -31,9 +33,24 @@ from harness_smith.artifacts import (
     Representation,
 )
 from harness_smith.json_document import parse_json_bytes
-from harness_smith.scan import EvidenceDocument, EvidenceStatus, RuntimeEvidenceSnapshot
+from harness_smith.scan import (
+    EvidenceDocument,
+    EvidenceSource,
+    EvidenceStatus,
+    RuntimeEvidenceSnapshot,
+)
 
 __all__ = ["discover_evidence"]
+
+# A managed policy is spread across a base file and the drop-ins beside it. Both are managed
+# policy settings, and each stays its own container so that a declaration keeps the file it came
+# from; which of them the runtime would merge first is a question for the effective policy.
+CONTAINER_SOURCES: Mapping[EvidenceSource, ContainerSource] = {
+    EvidenceSource.USER_SETTINGS: ContainerSource.USER_SETTINGS,
+    EvidenceSource.PROJECT_LOCAL_SETTINGS: ContainerSource.PROJECT_LOCAL_SETTINGS,
+    EvidenceSource.MANAGED_POLICY_BASE: ContainerSource.MANAGED_POLICY_SETTINGS,
+    EvidenceSource.MANAGED_POLICY_DROPIN: ContainerSource.MANAGED_POLICY_SETTINGS,
+}
 
 
 @dataclass(frozen=True)
@@ -82,5 +99,10 @@ def _container(document: EvidenceDocument, holds: tuple[str, ...]) -> ArtifactCo
     its own container: a declaration keeps the file it came from, and which of them the runtime
     would merge first is a question for whoever computes the effective policy."""
     return ArtifactContainer(
-        document.locator, ContainerFormat.JSON, document.scope, document.layer, holds
+        document.locator,
+        ContainerFormat.JSON,
+        CONTAINER_SOURCES[document.source],
+        document.scope,
+        document.settings_layer,
+        holds,
     )

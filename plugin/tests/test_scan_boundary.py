@@ -14,12 +14,21 @@ from pathlib import Path
 import pytest
 
 from harness_smith.adapters.claude_code import discover
-from harness_smith.artifacts import ArtifactType, Scope, SettingsLayer
+from harness_smith.artifacts import (
+    Activation,
+    ActivationCause,
+    ArtifactType,
+    Scope,
+    SettingsLayer,
+)
 from harness_smith.scan import (
     DiscoveryRequest,
+    EvidenceDirectory,
     EvidenceDocument,
+    EvidenceKind,
     EvidenceSource,
     EvidenceStatus,
+    EvidenceTarget,
     RuntimeEvidenceSnapshot,
 )
 from tests.support import write_tree
@@ -133,20 +142,31 @@ def test_a_plugin_artifact_keeps_its_own_scope_in_the_composed_report(tmp_path: 
 USER_LOCATOR = "~/.claude/settings.json"
 
 
-def collected(content: bytes) -> RuntimeEvidenceSnapshot:
+def user_target(locator: str) -> EvidenceTarget:
+    return EvidenceTarget(
+        source=EvidenceSource.USER_SETTINGS,
+        kind=EvidenceKind.DOCUMENT,
+        scope=Scope.USER_GLOBAL,
+        settings_layer=SettingsLayer.USER,
+        locator=locator,
+    )
+
+
+def user_document(locator: str, content: bytes) -> EvidenceDocument:
+    return EvidenceDocument(
+        source=EvidenceSource.USER_SETTINGS,
+        scope=Scope.USER_GLOBAL,
+        settings_layer=SettingsLayer.USER,
+        locator=locator,
+        status=EvidenceStatus.PRESENT,
+        content=content,
+    )
+
+
+def collected(content: bytes, locator: str = USER_LOCATOR) -> RuntimeEvidenceSnapshot:
     """What a collector observed for the user's own settings, and nothing more."""
     return RuntimeEvidenceSnapshot(
-        requested=(EvidenceSource.USER_SETTINGS,),
-        documents=(
-            EvidenceDocument(
-                source=EvidenceSource.USER_SETTINGS,
-                scope=Scope.USER_GLOBAL,
-                layer=SettingsLayer.USER,
-                locator=USER_LOCATOR,
-                status=EvidenceStatus.PRESENT,
-                content=content,
-            ),
-        ),
+        requested=(user_target(locator),), documents=(user_document(locator, content),)
     )
 
 
@@ -179,19 +199,7 @@ def test_a_source_that_changed_after_it_was_observed_does_not_change_the_report(
     root = repository(tmp_path)
     observed = tmp_path / "observed-settings.json"
     observed.write_text(SETTINGS, encoding="utf-8")
-    snapshot = RuntimeEvidenceSnapshot(
-        requested=(EvidenceSource.USER_SETTINGS,),
-        documents=(
-            EvidenceDocument(
-                source=EvidenceSource.USER_SETTINGS,
-                scope=Scope.USER_GLOBAL,
-                layer=SettingsLayer.USER,
-                locator=str(observed),
-                status=EvidenceStatus.PRESENT,
-                content=observed.read_bytes(),
-            ),
-        ),
-    )
+    snapshot = collected(observed.read_bytes(), str(observed))
     request = DiscoveryRequest(repository_root=root, runtime_evidence=snapshot)
     before = discover(request).report.as_document()
 
@@ -222,3 +230,120 @@ def test_an_observed_hook_keeps_the_scope_and_layer_it_was_observed_in(tmp_path:
     assert container.settings_layer is SettingsLayer.USER
     assert container.holds == (hook.locator,)
     assert hook.locator == f"{USER_LOCATOR}#/hooks/Stop/0"
+
+
+MANAGED_BASE = "/etc/claude-code/managed-settings.json"
+MANAGED_DROPINS = "/etc/claude-code/managed-settings.d"
+
+
+def policy_target(source: EvidenceSource, kind: EvidenceKind, locator: str) -> EvidenceTarget:
+    return EvidenceTarget(
+        source=source,
+        kind=kind,
+        scope=Scope.MANAGED_POLICY,
+        settings_layer=SettingsLayer.MANAGED_POLICY,
+        locator=locator,
+    )
+
+
+def policy_document(source: EvidenceSource, locator: str) -> EvidenceDocument:
+    return EvidenceDocument(
+        source=source,
+        scope=Scope.MANAGED_POLICY,
+        settings_layer=SettingsLayer.MANAGED_POLICY,
+        locator=locator,
+        status=EvidenceStatus.PRESENT,
+        content=SETTINGS.encode(),
+    )
+
+
+def policy_snapshot() -> RuntimeEvidenceSnapshot:
+    """A base file and one drop-in beside it, which is how an administrator splits a policy."""
+    dropin = f"{MANAGED_DROPINS}/10-security.json"
+    return RuntimeEvidenceSnapshot(
+        requested=(
+            policy_target(EvidenceSource.MANAGED_POLICY_BASE, EvidenceKind.DOCUMENT, MANAGED_BASE),
+            policy_target(
+                EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
+                EvidenceKind.DIRECTORY,
+                MANAGED_DROPINS,
+            ),
+        ),
+        documents=(
+            policy_document(EvidenceSource.MANAGED_POLICY_BASE, MANAGED_BASE),
+            policy_document(EvidenceSource.MANAGED_POLICY_DROPIN, dropin),
+        ),
+        directories=(
+            EvidenceDirectory(
+                source=EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
+                scope=Scope.MANAGED_POLICY,
+                settings_layer=SettingsLayer.MANAGED_POLICY,
+                locator=MANAGED_DROPINS,
+                status=EvidenceStatus.PRESENT,
+                entries=(dropin,),
+            ),
+        ),
+    )
+
+
+def test_a_policy_base_file_and_each_drop_in_stay_separate_containers(tmp_path: Path) -> None:
+    """A declaration keeps the file it came from. Merging them into one virtual container would
+    lose which administrator's file said what, and the merge order is a projection made
+    elsewhere."""
+    discovery = discover(
+        DiscoveryRequest(repository_root=repository(tmp_path), runtime_evidence=policy_snapshot())
+    )
+
+    policy = [
+        container
+        for container in discovery.report.containers
+        if container.scope is Scope.MANAGED_POLICY
+    ]
+
+    assert [container.locator for container in policy] == [
+        MANAGED_BASE,
+        f"{MANAGED_DROPINS}/10-security.json",
+    ]
+    assert all(container.holds for container in policy)
+
+
+def test_a_policy_hook_is_inventoried_without_being_called_effective(tmp_path: Path) -> None:
+    """The managed tier picks one of four ranked sources and a helper can replace the lot, so a
+    readable file says what it declares and nothing about what is in force. The raw artifact
+    stays: an activation projection is what decides unknown, not a missing artifact."""
+    discovery = discover(
+        DiscoveryRequest(repository_root=repository(tmp_path), runtime_evidence=policy_snapshot())
+    )
+
+    hooks = [
+        artifact
+        for artifact in discovery.report.artifacts
+        if artifact.scope is Scope.MANAGED_POLICY
+    ]
+
+    assert len(hooks) == 2
+    assert {artifact.activation for artifact in hooks} == {Activation.UNKNOWN}
+    assert {artifact.activation_cause for artifact in hooks} == {
+        ActivationCause.RUNTIME_STATE_NOT_READ
+    }
+
+
+def test_a_policy_hook_is_held_by_the_file_it_was_declared_in(tmp_path: Path) -> None:
+    discovery = discover(
+        DiscoveryRequest(repository_root=repository(tmp_path), runtime_evidence=policy_snapshot())
+    )
+
+    held = {
+        artifact.locator: discovery.report.container_of(artifact)
+        for artifact in discovery.report.artifacts
+        if artifact.scope is Scope.MANAGED_POLICY
+    }
+
+    assert {
+        locator: container.locator for locator, container in held.items() if container is not None
+    } == {
+        f"{MANAGED_BASE}#/hooks/Stop/0": MANAGED_BASE,
+        f"{MANAGED_DROPINS}/10-security.json#/hooks/Stop/0": (
+            f"{MANAGED_DROPINS}/10-security.json"
+        ),
+    }

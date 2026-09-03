@@ -702,6 +702,7 @@
       "required": [
         "locator",
         "format",
+        "source",
         "scope",
         "settingsLayer",
         "holds"
@@ -714,6 +715,18 @@
           "enum": [
             "json",
             "yaml-frontmatter"
+          ]
+        },
+        "source": {
+          "enum": [
+            "shared-project-settings",
+            "project-local-settings",
+            "user-settings",
+            "managed-policy-settings",
+            "plugin-hook-file",
+            "plugin-manifest",
+            "skill-frontmatter",
+            "subagent-frontmatter"
           ]
         },
         "scope": {
@@ -751,16 +764,19 @@
         {
           "if": {
             "properties": {
-              "settingsLayer": {
-                "const": "shared-project"
+              "source": {
+                "const": "shared-project-settings"
               }
             },
             "required": [
-              "settingsLayer"
+              "source"
             ]
           },
           "then": {
             "properties": {
+              "settingsLayer": {
+                "const": "shared-project"
+              },
               "scope": {
                 "const": "repository"
               }
@@ -769,17 +785,20 @@
         },
         {
           "if": {
+            "properties": {
+              "source": {
+                "const": "project-local-settings"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
             "properties": {
               "settingsLayer": {
                 "const": "project-local"
-              }
-            },
-            "required": [
-              "settingsLayer"
-            ]
-          },
-          "then": {
-            "properties": {
+              },
               "scope": {
                 "const": "repository"
               }
@@ -789,16 +808,19 @@
         {
           "if": {
             "properties": {
-              "settingsLayer": {
-                "const": "user"
+              "source": {
+                "const": "user-settings"
               }
             },
             "required": [
-              "settingsLayer"
+              "source"
             ]
           },
           "then": {
             "properties": {
+              "settingsLayer": {
+                "const": "user"
+              },
               "scope": {
                 "const": "user-global"
               }
@@ -808,18 +830,97 @@
         {
           "if": {
             "properties": {
-              "settingsLayer": {
-                "const": "managed-policy"
+              "source": {
+                "const": "managed-policy-settings"
               }
             },
             "required": [
-              "settingsLayer"
+              "source"
             ]
           },
           "then": {
             "properties": {
+              "settingsLayer": {
+                "const": "managed-policy"
+              },
               "scope": {
                 "const": "managed-policy"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "plugin-hook-file"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "settingsLayer": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "plugin-manifest"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "settingsLayer": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "skill-frontmatter"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "settingsLayer": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "subagent-frontmatter"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "properties": {
+              "settingsLayer": {
+                "type": "null"
               }
             }
           }

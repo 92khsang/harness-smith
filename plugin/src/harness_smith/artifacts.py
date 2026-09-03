@@ -19,6 +19,7 @@ from enum import StrEnum
 from harness_smith.diagnostics import Diagnostic
 
 __all__ = [
+    "LAYER_BY_CONTAINER_SOURCE",
     "SCOPE_BY_LAYER",
     "Activation",
     "ActivationCause",
@@ -27,6 +28,7 @@ __all__ = [
     "CapabilityPolicy",
     "CapabilityValue",
     "ContainerFormat",
+    "ContainerSource",
     "Discovery",
     "DiscoveryReport",
     "GovernanceSet",
@@ -159,6 +161,39 @@ SCOPE_BY_LAYER: Mapping[SettingsLayer, Scope] = {
 }
 
 
+class ContainerSource(StrEnum):
+    """What kind of thing a container is, said rather than inferred.
+
+    A reader that had to tell a settings file from a plugin's hook file by looking at its
+    Locator would be re-deriving what discovery already knew, and would get it wrong the first
+    time a runtime moved a file. This is the discriminator that makes "a settings container
+    always names its layer" a checkable statement rather than a convention.
+    """
+
+    SHARED_PROJECT_SETTINGS = "shared-project-settings"
+    PROJECT_LOCAL_SETTINGS = "project-local-settings"
+    USER_SETTINGS = "user-settings"
+    MANAGED_POLICY_SETTINGS = "managed-policy-settings"
+    PLUGIN_HOOK_FILE = "plugin-hook-file"
+    PLUGIN_MANIFEST = "plugin-manifest"
+    SKILL_FRONTMATTER = "skill-frontmatter"
+    SUBAGENT_FRONTMATTER = "subagent-frontmatter"
+
+
+# A settings container belongs to exactly one layer and everything else to none, so the two are
+# one table rather than two facts that can drift apart.
+LAYER_BY_CONTAINER_SOURCE: Mapping[ContainerSource, SettingsLayer | None] = {
+    ContainerSource.SHARED_PROJECT_SETTINGS: SettingsLayer.SHARED_PROJECT,
+    ContainerSource.PROJECT_LOCAL_SETTINGS: SettingsLayer.PROJECT_LOCAL,
+    ContainerSource.USER_SETTINGS: SettingsLayer.USER,
+    ContainerSource.MANAGED_POLICY_SETTINGS: SettingsLayer.MANAGED_POLICY,
+    ContainerSource.PLUGIN_HOOK_FILE: None,
+    ContainerSource.PLUGIN_MANIFEST: None,
+    ContainerSource.SKILL_FRONTMATTER: None,
+    ContainerSource.SUBAGENT_FRONTMATTER: None,
+}
+
+
 class ContainerFormat(StrEnum):
     JSON = "json"
     YAML_FRONTMATTER = "yaml-frontmatter"
@@ -266,19 +301,28 @@ class ArtifactContainer:
     """A file holding zero or more Artifacts addressed by pointer rather than by path.
 
     A container carries the Scope it was found in, so the same containing file at the same
-    Locator in two Scopes is two entries rather than one, and the settings layer where it has
-    one, so that a reader following a Hook to the container it is held in learns whether it is
-    shared settings or a personal overlay without parsing a Locator. A container that is not a
-    settings file has no layer.
+    Locator in two Scopes is two entries rather than one. It says what kind of container it is,
+    and the settings layer that follows from that, so a reader following a Hook to the container
+    holding it learns whether it is shared settings or a personal overlay without parsing a
+    Locator. A container that is not a settings file has no layer.
+
+    ``holds`` names Locators inside this container, and a Locator alone does not identify an
+    Artifact: the same one occurs in more than one Scope. What a container holds is therefore
+    read at this container's Scope, which is what ``DiscoveryReport.container_of`` does.
     """
 
     locator: str
     format: ContainerFormat
+    source: ContainerSource
     scope: Scope
     settings_layer: SettingsLayer | None = None
     holds: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        expected = LAYER_BY_CONTAINER_SOURCE[self.source]
+        if self.settings_layer != expected:
+            named = "no layer" if expected is None else f"the {expected.value} layer"
+            raise ValueError(f"a {self.source.value} container is in {named}")
         if self.settings_layer is not None and SCOPE_BY_LAYER[self.settings_layer] != self.scope:
             raise ValueError(
                 f"the {self.settings_layer.value} layer is in "
@@ -289,6 +333,7 @@ class ArtifactContainer:
         return {
             "locator": self.locator,
             "format": self.format.value,
+            "source": self.source.value,
             "scope": self.scope.value,
             "settingsLayer": None if self.settings_layer is None else self.settings_layer.value,
             "holds": sorted(self.holds),
@@ -325,6 +370,18 @@ class DiscoveryReport:
     artifacts: tuple[InventoriedArtifact, ...] = ()
     containers: tuple[ArtifactContainer, ...] = ()
     observations: tuple[RuntimeComponentObservation, ...] = ()
+
+    def container_of(self, artifact: InventoriedArtifact) -> ArtifactContainer | None:
+        """The container holding ``artifact``, or nothing when it is addressed by path.
+
+        Artifact identity is ``(scope, locator)`` and so is a container's, so the join is on
+        both. Joining on the Locator alone would hand a repository hook the plugin container
+        that happens to sit at the same Locator.
+        """
+        for container in self.containers:
+            if container.scope is artifact.scope and artifact.locator in container.holds:
+                return container
+        return None
 
     def as_document(self) -> dict[str, object]:
         """Every section is ordered, because a report is read, compared and diffed.

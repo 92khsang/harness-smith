@@ -30,8 +30,10 @@ __all__ = [
     "EvidenceCause",
     "EvidenceDirectory",
     "EvidenceDocument",
+    "EvidenceKind",
     "EvidenceSource",
     "EvidenceStatus",
+    "EvidenceTarget",
     "RuntimeEvidenceSnapshot",
     "SettingsLayer",
 ]
@@ -74,15 +76,39 @@ class EvidenceSource(StrEnum):
     MANAGED_POLICY_DROPIN_DIRECTORY = "managed-policy-dropin-directory"
 
 
-# The sources with one expected location. A collection that was asked for them answers for
-# each, present or not, so that a collector that skipped one cannot read as a machine that had
-# none. Drop-in documents are not among them: how many there are is what the directory says.
-SINGULAR_SOURCES: tuple[EvidenceSource, ...] = (
-    EvidenceSource.USER_SETTINGS,
-    EvidenceSource.PROJECT_LOCAL_SETTINGS,
-    EvidenceSource.MANAGED_POLICY_BASE,
-    EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
-)
+class EvidenceKind(StrEnum):
+    """Whether a target is one file or the listing of a directory."""
+
+    DOCUMENT = "document"
+    DIRECTORY = "directory"
+
+
+@dataclass(frozen=True)
+class EvidenceTarget:
+    """One place a collector was asked to look, named in full.
+
+    A kind of source does not have one location. Claude Code reads a project-local settings
+    file at the repository root and, where an older version left one, at the starting directory
+    as well; a worktree and a moved session change where that root is, and `CLAUDE_CONFIG_DIR`
+    moves the user's. Coverage is therefore counted per place rather than per kind, so the
+    collector can decide what this runtime and platform actually have without the scan's
+    contract changing under it.
+    """
+
+    source: EvidenceSource
+    kind: EvidenceKind
+    scope: Scope
+    settings_layer: SettingsLayer
+    locator: str
+
+    def __post_init__(self) -> None:
+        _check_scope(self.scope, self.settings_layer)
+        if not self.locator:
+            raise ValueError("a target names the place it was asked to look at")
+
+    @property
+    def identity(self) -> tuple[EvidenceKind, EvidenceSource, str]:
+        return self.kind, self.source, self.locator
 
 
 def eligible_dropin(locator: str) -> bool:
@@ -102,14 +128,14 @@ class EvidenceDocument:
 
     source: EvidenceSource
     scope: Scope
-    layer: SettingsLayer
+    settings_layer: SettingsLayer
     locator: str
     status: EvidenceStatus
     content: bytes | None = None
     cause: EvidenceCause | None = None
 
     def __post_init__(self) -> None:
-        _check(self.locator, self.status, self.cause, self.scope, self.layer)
+        _check(self.locator, self.status, self.cause, self.scope, self.settings_layer)
         if (self.content is not None) is not (self.status is EvidenceStatus.PRESENT):
             raise ValueError(
                 "content is exactly what was observed, so only a present source has it"
@@ -127,14 +153,14 @@ class EvidenceDirectory:
 
     source: EvidenceSource
     scope: Scope
-    layer: SettingsLayer
+    settings_layer: SettingsLayer
     locator: str
     status: EvidenceStatus
     entries: tuple[str, ...] = ()
     cause: EvidenceCause | None = None
 
     def __post_init__(self) -> None:
-        _check(self.locator, self.status, self.cause, self.scope, self.layer)
+        _check(self.locator, self.status, self.cause, self.scope, self.settings_layer)
         if self.entries and self.status is not EvidenceStatus.PRESENT:
             raise ValueError("a directory that was not observed holds no entries")
 
@@ -143,26 +169,21 @@ class EvidenceDirectory:
 class RuntimeEvidenceSnapshot:
     """Everything a collector observed for one run, and nothing about what to do with it.
 
-    ``requested`` is what the collector was asked to observe, and every one of those sources
-    answers for itself. Without it an empty snapshot would read as "every runtime source was
-    checked and none exists", which is what a collector that failed to run also looks like, and
-    a missed collection would pass as a clean machine.
+    ``requested`` is every place the collector was asked to look, and each of them answers for
+    itself. Without it an empty snapshot would read as "every runtime source was checked and
+    none exists", which is what a collector that failed to run also looks like, and a missed
+    collection would pass as a clean machine.
+
+    Which places those are is the collector's to decide, because it is the one that knows this
+    runtime and this platform. Nothing here derives a location.
     """
 
-    requested: tuple[EvidenceSource, ...] = ()
+    requested: tuple[EvidenceTarget, ...] = ()
     documents: tuple[EvidenceDocument, ...] = ()
     directories: tuple[EvidenceDirectory, ...] = ()
 
     def __post_init__(self) -> None:
-        records: tuple[EvidenceDocument | EvidenceDirectory, ...] = (
-            *self.documents,
-            *self.directories,
-        )
-        observed = {record.source for record in records}
-        missing = [source for source in self.requested if source not in observed]
-        if missing:
-            raise ValueError(f"the {missing[0].value} source was requested and never answered for")
-        _one_record_each(self.documents, self.directories)
+        _every_target_answered(self.requested, self.documents, self.directories)
         _dropins_belong_to_their_directory(self.documents, self.directories)
 
 
@@ -195,28 +216,60 @@ def _check(
     """The invariants that keep "we looked and found nothing" distinguishable from the rest."""
     if not locator:
         raise ValueError("evidence keeps the Locator it was expected at, even when absent")
-    if SCOPE_BY_LAYER[layer] != scope:
-        raise ValueError(
-            f"the {layer.value} layer is in {SCOPE_BY_LAYER[layer].value} scope, not {scope.value}"
-        )
+    _check_scope(scope, layer)
     unresolved = {EvidenceStatus.UNREADABLE, EvidenceStatus.UNSUPPORTED}
     if (cause is not None) is not (status in unresolved):
         raise ValueError("a cause says why a source yielded nothing, and only then")
 
 
-def _one_record_each(
-    documents: tuple[EvidenceDocument, ...], directories: tuple[EvidenceDirectory, ...]
+def _every_target_answered(
+    requested: tuple[EvidenceTarget, ...],
+    documents: tuple[EvidenceDocument, ...],
+    directories: tuple[EvidenceDirectory, ...],
 ) -> None:
-    """One source is observed once. A repeat is two answers to one question, and nothing here
-    says which of them the run actually saw."""
+    """Each place looked at is answered for exactly once, and nothing is answered that was
+    never asked, apart from the drop-ins a directory listing names.
+
+    A repeat is two answers to one question with nothing to say which the run saw; an answer to
+    an unasked question is a collector reporting a place it was not covering.
+    """
+    asked = [target.identity for target in requested]
+    if len(set(asked)) != len(asked):
+        raise ValueError("one place is asked about once")
+    answers = [
+        (EvidenceKind.DOCUMENT, document.source, document.locator) for document in documents
+    ] + [(EvidenceKind.DIRECTORY, directory.source, directory.locator) for directory in directories]
+    if len(set(answers)) != len(answers):
+        raise ValueError("one place is answered for once")
+    for target in requested:
+        if target.identity not in answers:
+            raise ValueError(f"{target.locator} was requested and never answered for")
+    derived = {answer for answer in answers if answer[1] is EvidenceSource.MANAGED_POLICY_DROPIN}
+    unasked = set(answers) - set(asked) - derived
+    if unasked:
+        raise ValueError(f"{sorted(unasked)[0][2]} was answered for and never requested")
+    _targets_agree(requested, documents, directories)
+
+
+def _targets_agree(
+    requested: tuple[EvidenceTarget, ...],
+    documents: tuple[EvidenceDocument, ...],
+    directories: tuple[EvidenceDirectory, ...],
+) -> None:
+    """An answer describes the place it answers for, so its Scope and layer are the target's."""
+    by_identity = {target.identity: target for target in requested}
     records: tuple[EvidenceDocument | EvidenceDirectory, ...] = (*documents, *directories)
-    singular = [record.source for record in records if record.source in SINGULAR_SOURCES]
-    repeated = {source for source in singular if singular.count(source) > 1}
-    if repeated:
-        raise ValueError(f"the {sorted(repeated)[0].value} source is observed more than once")
-    locators = [document.locator for document in documents]
-    if len(set(locators)) != len(locators):
-        raise ValueError("two documents were observed at one Locator")
+    for record in records:
+        kind = (
+            EvidenceKind.DOCUMENT
+            if isinstance(record, EvidenceDocument)
+            else EvidenceKind.DIRECTORY
+        )
+        target = by_identity.get((kind, record.source, record.locator))
+        if target is None:
+            continue
+        if (record.scope, record.settings_layer) != (target.scope, target.settings_layer):
+            raise ValueError(f"{record.locator} was answered for as a different kind of place")
 
 
 def _dropins_belong_to_their_directory(
@@ -248,3 +301,11 @@ def _dropins_belong_to_their_directory(
         unlisted = sorted(dropins - expected)
         missing = unread[0] if unread else unlisted[0]
         raise ValueError(f"the drop-in listing and the documents disagree about {missing}")
+
+
+def _check_scope(scope: Scope, layer: SettingsLayer) -> None:
+    """Each layer sits in exactly one Scope, so the pair is checked rather than trusted."""
+    if SCOPE_BY_LAYER[layer] != scope:
+        raise ValueError(
+            f"the {layer.value} layer is in {SCOPE_BY_LAYER[layer].value} scope, not {scope.value}"
+        )
