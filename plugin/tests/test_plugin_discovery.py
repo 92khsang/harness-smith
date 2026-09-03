@@ -627,15 +627,120 @@ def test_a_command_definition_map_locates_the_markdown_each_definition_names(
     assert codes(discovery) == []
 
 
-def test_a_remote_bundle_is_located_where_it_is_declared(tmp_path: Path) -> None:
+BUNDLE = "https://example.com/server.mcpb"
+
+
+@pytest.mark.parametrize("declared", [BUNDLE, [BUNDLE]], ids=["string", "list"])
+def test_a_remote_bundle_is_located_where_it_is_declared(tmp_path: Path, declared: object) -> None:
     """`mcpServers` also takes a URL naming a remote MCPB bundle. The bundle is not in the
     plugin, so the only Locator it has is the manifest that declares it."""
+    discovery = scan(tmp_path, {MANIFEST: manifest(name="p", mcpServers=declared)})
+
+    assert observed(discovery) == [("manifest", MANIFEST), ("mcpServers", MANIFEST)]
+
+
+def test_a_remote_bundle_beside_a_local_path_loses_neither(tmp_path: Path) -> None:
     discovery = scan(
         tmp_path,
-        {MANIFEST: manifest(name="p", mcpServers="https://example.com/server.mcpb")},
+        {
+            MANIFEST: manifest(name="p", mcpServers=[BUNDLE, "./config/mcp.json"]),
+            ".mcp.json": "{}\n",
+            "config/mcp.json": "{}\n",
+        },
+    )
+
+    assert observed(discovery) == [
+        ("manifest", MANIFEST),
+        ("mcpServers", MANIFEST),
+        ("mcpServers", ".mcp.json"),
+        ("mcpServers", "config/mcp.json"),
+    ]
+
+
+def test_a_remote_bundle_beside_an_inline_object_locates_the_manifest_once(
+    tmp_path: Path,
+) -> None:
+    discovery = scan(
+        tmp_path,
+        {MANIFEST: manifest(name="p", mcpServers=[BUNDLE, {"docs": {"command": "serve"}}])},
     )
 
     assert observed(discovery) == [("manifest", MANIFEST), ("mcpServers", MANIFEST)]
+
+
+def test_a_commands_path_naming_a_skill_directory_is_that_one_skill(tmp_path: Path) -> None:
+    """A commands path names "a command file or skill directory". Walking a skill directory for
+    Markdown would inventory the skill's own supporting material as commands."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", commands="./custom/review"),
+            "custom/review/SKILL.md": SKILL,
+            "custom/review/references.md": "# references\n",
+            "custom/review/examples/usage.md": "# usage\n",
+        },
+    )
+
+    (skill,) = discovery.report.artifacts
+
+    assert skill.locator == "custom/review/SKILL.md"
+    assert skill.representation is Representation.DIRECTORY
+
+
+def test_a_commands_directory_without_a_skill_file_holds_command_form_skills(
+    tmp_path: Path,
+) -> None:
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", commands="./custom/commands"),
+            "custom/commands/status.md": "# status\n",
+            "custom/commands/deep/logs.md": "# logs\n",
+        },
+    )
+
+    assert locators(discovery, ArtifactType.SKILL) == [
+        "custom/commands/deep/logs.md",
+        "custom/commands/status.md",
+    ]
+    assert {entry.representation for entry in discovery.report.artifacts} == {
+        Representation.LEGACY_COMMAND
+    }
+
+
+def test_one_skill_reached_through_both_fields_is_inventoried_once(tmp_path: Path) -> None:
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", skills=["./custom/review"], commands="./custom/review"),
+            "custom/review/SKILL.md": SKILL,
+        },
+    )
+
+    (skill,) = discovery.report.artifacts
+
+    assert skill.locator == "custom/review/SKILL.md"
+    assert skill.representation is Representation.DIRECTORY
+
+
+def test_reaching_a_skill_file_through_a_command_path_keeps_it_a_directory_skill(
+    tmp_path: Path,
+) -> None:
+    """Representation says how an artifact is written down, which the path that reached it does
+    not change."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(
+                name="p", skills=["./custom/review"], commands="./custom/review/SKILL.md"
+            ),
+            "custom/review/SKILL.md": SKILL,
+        },
+    )
+
+    (skill,) = discovery.report.artifacts
+
+    assert skill.representation is Representation.DIRECTORY
 
 
 def test_an_inline_component_declaration_is_observed_at_the_manifest(tmp_path: Path) -> None:

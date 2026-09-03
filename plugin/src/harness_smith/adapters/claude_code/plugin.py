@@ -22,6 +22,7 @@ question.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from harness_smith.adapters.claude_code import tree
@@ -63,19 +64,7 @@ def discover_plugin(root: Path) -> Discovery:
     resolution = resolve(root)
     return Discovery(
         report=DiscoveryReport(
-            artifacts=(
-                *_skills(root, resolution),
-                *_markdown(
-                    root,
-                    resolution,
-                    Component.COMMANDS,
-                    ArtifactType.SKILL,
-                    Representation.LEGACY_COMMAND,
-                ),
-                *_markdown(
-                    root, resolution, Component.AGENTS, ArtifactType.AGENT, Representation.FILE
-                ),
-            ),
+            artifacts=(*_skill_artifacts(root, resolution), *_agents(root, resolution)),
             observations=_observations(root, resolution),
         ),
         diagnostics=resolution.diagnostics,
@@ -88,45 +77,71 @@ def _artifact(
     return InventoriedArtifact.runtime_native(found, artifact_type, SCOPE, representation)
 
 
-def _skills(root: Path, resolution: Resolution) -> tuple[InventoriedArtifact, ...]:
+def _skill_artifacts(root: Path, resolution: Resolution) -> tuple[InventoriedArtifact, ...]:
+    """Every Skill a plugin declares, however it is reached.
+
+    A `skills` path and a `commands` path can name the same skill directory, and it is one
+    Skill either way. Representation says how the artifact is written down, which the path that
+    reached it does not change, so a directory-form skill stays one even when a command path
+    found it.
+    """
+    found: dict[str, Representation] = {}
+    for locator, representation in (*_skills(root, resolution), *_commands(root, resolution)):
+        if found.get(locator) is not Representation.DIRECTORY:
+            found[locator] = representation
+    return tuple(
+        _artifact(locator, ArtifactType.SKILL, representation)
+        for locator, representation in sorted(found.items())
+    )
+
+
+def _skills(root: Path, resolution: Resolution) -> Iterator[tuple[str, Representation]]:
     """A skills path is either one skill or a directory of them, decided by whether it holds a
     ``SKILL.md`` of its own. Both forms are documented, and reading the path as a directory of
     skills when it is one would take a skill's own supporting material for more skills."""
-    found: list[str] = []
     for location in resolution.locations[Component.SKILLS]:
         directory = root / location
         if (directory / tree.SKILL_FILE).is_file():
-            found.append(tree.locator(root, directory / tree.SKILL_FILE))
+            yield tree.locator(root, directory / tree.SKILL_FILE), Representation.DIRECTORY
             continue
-        found.extend(tree.locator(root, path) for path in tree.files(directory, tree.NESTED_SKILLS))
-    return _artifacts(found, ArtifactType.SKILL, Representation.DIRECTORY)
+        for path in tree.files(directory, tree.NESTED_SKILLS):
+            yield tree.locator(root, path), Representation.DIRECTORY
 
 
-def _markdown(
-    root: Path,
-    resolution: Resolution,
-    component: Component,
-    artifact_type: ArtifactType,
-    representation: Representation,
-) -> tuple[InventoriedArtifact, ...]:
+def _commands(root: Path, resolution: Resolution) -> Iterator[tuple[str, Representation]]:
+    """A commands path names "a command file or skill directory".
+
+    A directory holding a ``SKILL.md`` is that skill and only that skill: walking it for
+    Markdown would inventory the skill's own supporting material as commands the runtime never
+    loads. A directory without one is a directory of command files.
+    """
+    for location in resolution.locations[Component.COMMANDS]:
+        path = root / location
+        if path.is_file():
+            if path.suffix == tree.MARKDOWN:
+                yield tree.locator(root, path), Representation.LEGACY_COMMAND
+            continue
+        skill = path / tree.SKILL_FILE
+        if skill.is_file():
+            yield tree.locator(root, skill), Representation.DIRECTORY
+            continue
+        for entry in tree.files(path, tree.MARKDOWN_TREE):
+            yield tree.locator(root, entry), Representation.LEGACY_COMMAND
+
+
+def _agents(root: Path, resolution: Resolution) -> tuple[InventoriedArtifact, ...]:
     """A declared path may name one Markdown file rather than a directory of them."""
     found: list[str] = []
-    for location in resolution.locations[component]:
+    for location in resolution.locations[Component.AGENTS]:
         path = root / location
         if path.is_file():
             if path.suffix == tree.MARKDOWN:
                 found.append(tree.locator(root, path))
             continue
         found.extend(tree.locator(root, entry) for entry in tree.files(path, tree.MARKDOWN_TREE))
-    return _artifacts(found, artifact_type, representation)
-
-
-def _artifacts(
-    found: list[str], artifact_type: ArtifactType, representation: Representation
-) -> tuple[InventoriedArtifact, ...]:
-    """Two locations may name the same file, and it is one artifact either way."""
     return tuple(
-        _artifact(entry, artifact_type, representation) for entry in dict.fromkeys(sorted(found))
+        _artifact(entry, ArtifactType.AGENT, Representation.FILE)
+        for entry in dict.fromkeys(sorted(found))
     )
 
 

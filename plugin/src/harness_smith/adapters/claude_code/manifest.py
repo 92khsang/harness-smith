@@ -247,9 +247,8 @@ def _declaration(
         paths = _definition_paths(value) if spec.definitions else ()
         return _Declaration(True, paths, spec.inline is Inline.OBJECT)
     if isinstance(value, str):
-        if spec.remote and _remote(value):
-            return _Declaration(True, inline=True)
-        return _Declaration(True, (value,))
+        paths, remote = _split(spec, (value,))
+        return _Declaration(True, paths, remote)
     return _Declaration(True)
 
 
@@ -262,9 +261,21 @@ def _from_list(spec: ComponentSpec, value: list[object]) -> _Declaration:
     """
     if spec.inline is Inline.ARRAY:
         return _Declaration(True, inline=all(isinstance(entry, dict) for entry in value))
-    paths = tuple(entry for entry in value if isinstance(entry, str))
-    holds_object = any(isinstance(entry, dict) for entry in value)
-    return _Declaration(True, paths, spec.inline is Inline.OBJECT and holds_object)
+    paths, remote = _split(spec, tuple(entry for entry in value if isinstance(entry, str)))
+    holds_object = spec.inline is Inline.OBJECT and any(isinstance(entry, dict) for entry in value)
+    return _Declaration(True, paths, remote or holds_object)
+
+
+def _split(spec: ComponentSpec, declared: tuple[str, ...]) -> tuple[tuple[str, ...], bool]:
+    """``declared`` split into the paths inside the plugin and whether any of it is remote.
+
+    A remote value names something the plugin does not contain, so it resolves to no Locator
+    there and the component is located where it is declared instead. One list may carry both.
+    """
+    if not spec.remote:
+        return declared, False
+    paths = tuple(entry for entry in declared if not _remote(entry))
+    return paths, len(paths) < len(declared)
 
 
 def _definition_paths(definitions: Mapping[str, object]) -> tuple[str, ...]:
