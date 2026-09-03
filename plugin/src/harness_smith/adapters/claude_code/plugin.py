@@ -28,8 +28,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness_smith.adapters.claude_code import declared, tree
 from harness_smith.adapters.claude_code import hooks as hook_container
-from harness_smith.adapters.claude_code import tree
 from harness_smith.adapters.claude_code.capability import capability
 from harness_smith.adapters.claude_code.manifest import (
     HOOKS_MEMBER,
@@ -52,6 +52,7 @@ from harness_smith.artifacts import (
     Scope,
 )
 from harness_smith.diagnostics import Diagnostic
+from harness_smith.frontmatter import read_frontmatter_file
 from harness_smith.json_document import JsonDocumentState, read_json_document
 from harness_smith.vocabulary import Subject, SubjectKind
 
@@ -79,20 +80,33 @@ def discover_plugin(root: Path) -> Discovery:
     """Scan the plugin rooted at ``root`` for the components its manifest and the runtime's
     defaults put there."""
     resolution = resolve(root)
+    skills = _skill_artifacts(root, resolution)
+    agents = _agents(root, resolution)
+    frontmatter = _declared(root, (*skills, *agents))
     hooks = _hooks(root, resolution)
     return Discovery(
         report=DiscoveryReport(
-            artifacts=(
-                *_skill_artifacts(root, resolution),
-                *_agents(root, resolution),
-                *hooks.artifacts,
-            ),
-            containers=hooks.containers,
+            artifacts=(*skills, *agents, *hooks.artifacts, *frontmatter.artifacts),
+            containers=(*hooks.containers, *frontmatter.containers),
             observations=_observations(root, resolution),
         ),
-        diagnostics=(*resolution.diagnostics, *hooks.diagnostics),
-        hooks=hooks.declarations,
+        diagnostics=(*resolution.diagnostics, *hooks.diagnostics, *frontmatter.diagnostics),
+        hooks=(*hooks.declarations, *frontmatter.declarations),
     )
+
+
+def _declared(root: Path, artifacts: tuple[InventoriedArtifact, ...]) -> declared.Declared:
+    """What each Skill and Subagent declares in its own frontmatter, read once per file."""
+    found = declared.Declared()
+    for artifact in artifacts:
+        frontmatter = read_frontmatter_file(root / artifact.locator)
+        finding = declared.finding(artifact.locator, artifact.type, frontmatter)
+        if finding is not None:
+            found = found.joined(declared.Declared(diagnostics=(finding,)))
+        found = found.joined(
+            declared.from_frontmatter(artifact.locator, artifact.type, SCOPE, frontmatter)
+        )
+    return found
 
 
 def _artifact(

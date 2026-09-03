@@ -86,6 +86,23 @@ def _registry() -> dict[str, DiagnosticSpec]:
             "Add a test for the enforcer, or drop the enforcement claim",
         ),
         "HS-RULE-ID-DUPLICATE": (error_1, "Rename one"),
+        # Skills and subagents
+        "HS-SKILL-FILE-UNREADABLE": (
+            error_1,
+            "Make the skill readable UTF-8 text, then rerun",
+        ),
+        "HS-SKILL-FRONTMATTER-INVALID": (
+            error_1,
+            "Fix the delimiters, the YAML, or the mapping shape",
+        ),
+        "HS-AGENT-FILE-UNREADABLE": (
+            error_1,
+            "Make the subagent readable UTF-8 text, then rerun",
+        ),
+        "HS-AGENT-FRONTMATTER-INVALID": (
+            error_1,
+            "Fix the delimiters, the YAML, or the mapping shape",
+        ),
         # Hooks
         "HS-HOOK-CONTAINER-FILE-UNREADABLE": (
             error_1,

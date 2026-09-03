@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
+from harness_smith.adapters.claude_code import declared, tree
 from harness_smith.adapters.claude_code import hooks as hook_container
-from harness_smith.adapters.claude_code import tree
 from harness_smith.artifacts import (
     ArtifactContainer,
     ArtifactType,
@@ -133,18 +133,20 @@ def _frontmatter_finding(locator: str, frontmatter: Frontmatter) -> Diagnostic |
 def _skills(root: Path) -> _Scan:
     artifacts: list[InventoriedArtifact] = []
     diagnostics: list[Diagnostic] = []
+    found = declared.Declared()
     skills_directory = root / SKILLS_DIRECTORY
     directory_form: set[str] = set()
 
     for path in tree.files(skills_directory, tree.NESTED_SKILLS):
-        artifacts.append(
-            _artifact(tree.locator(root, path), ArtifactType.SKILL, Representation.DIRECTORY)
-        )
+        locator = tree.locator(root, path)
+        artifacts.append(_artifact(locator, ArtifactType.SKILL, Representation.DIRECTORY))
+        found = found.joined(_declares(root, path, ArtifactType.SKILL, diagnostics))
         directory_form.add(path.parent.name)
 
     for path in tree.files(root / COMMANDS_DIRECTORY, tree.MARKDOWN_TREE):
         locator = tree.locator(root, path)
         artifacts.append(_artifact(locator, ArtifactType.SKILL, Representation.LEGACY_COMMAND))
+        found = found.joined(_declares(root, path, ArtifactType.SKILL, diagnostics))
         if path.stem in directory_form:
             diagnostics.append(
                 Diagnostic.of(
@@ -156,15 +158,44 @@ def _skills(root: Path) -> _Scan:
                     ),
                 )
             )
-    return _Scan(tuple(artifacts), tuple(diagnostics))
+    return _found(artifacts, diagnostics, found)
 
 
 def _agents(root: Path) -> _Scan:
-    return _Scan(
-        tuple(
+    artifacts: list[InventoriedArtifact] = []
+    diagnostics: list[Diagnostic] = []
+    found = declared.Declared()
+    for path in tree.files(root / AGENTS_DIRECTORY, tree.MARKDOWN_TREE):
+        artifacts.append(
             _artifact(tree.locator(root, path), ArtifactType.AGENT, Representation.FILE)
-            for path in tree.files(root / AGENTS_DIRECTORY, tree.MARKDOWN_TREE)
         )
+        found = found.joined(_declares(root, path, ArtifactType.AGENT, diagnostics))
+    return _found(artifacts, diagnostics, found)
+
+
+def _declares(
+    root: Path, path: Path, artifact_type: ArtifactType, diagnostics: list[Diagnostic]
+) -> declared.Declared:
+    """One file, read once. Whether it can be read at all is the Artifact's finding and is
+    collected here; what its frontmatter declares beyond that is the hook scan's."""
+    locator = tree.locator(root, path)
+    frontmatter = read_frontmatter_file(path)
+    finding = declared.finding(locator, artifact_type, frontmatter)
+    if finding is not None:
+        diagnostics.append(finding)
+    return declared.from_frontmatter(locator, artifact_type, Scope.REPOSITORY, frontmatter)
+
+
+def _found(
+    artifacts: list[InventoriedArtifact],
+    diagnostics: list[Diagnostic],
+    found: declared.Declared,
+) -> _Scan:
+    return _Scan(
+        (*artifacts, *found.artifacts),
+        (*diagnostics, *found.diagnostics),
+        found.containers,
+        found.declarations,
     )
 
 
