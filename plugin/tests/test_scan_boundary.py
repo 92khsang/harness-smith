@@ -324,7 +324,7 @@ def test_a_policy_hook_is_inventoried_without_being_called_effective(tmp_path: P
     assert len(hooks) == 2
     assert {artifact.activation for artifact in hooks} == {Activation.UNKNOWN}
     assert {artifact.activation_cause for artifact in hooks} == {
-        ActivationCause.RUNTIME_STATE_NOT_READ
+        ActivationCause.MANAGED_POLICY_UNINSPECTABLE
     }
 
 
@@ -347,3 +347,33 @@ def test_a_policy_hook_is_held_by_the_file_it_was_declared_in(tmp_path: Path) ->
             f"{MANAGED_DROPINS}/10-security.json"
         ),
     }
+
+
+def test_a_run_that_never_asked_for_runtime_state_says_so(tmp_path: Path) -> None:
+    """The cause names what was not read, and offline nothing of the runtime was."""
+    discovery = discover(DiscoveryRequest(repository_root=repository(tmp_path)))
+
+    (hook,) = [
+        artifact for artifact in discovery.report.artifacts if artifact.type is ArtifactType.HOOK
+    ]
+
+    assert hook.activation is Activation.UNKNOWN
+    assert hook.activation_cause is ActivationCause.RUNTIME_STATE_NOT_READ
+
+
+def test_reading_a_policy_file_settles_neither_active_nor_inactive(tmp_path: Path) -> None:
+    """Finding a readable file does not make its hooks run, and a higher-ranked managed source
+    that may or may not exist does not make them stop."""
+    discovery = discover(
+        DiscoveryRequest(repository_root=repository(tmp_path), runtime_evidence=policy_snapshot())
+    )
+
+    activations = {
+        artifact.activation
+        for artifact in discovery.report.artifacts
+        if artifact.scope is Scope.MANAGED_POLICY
+    }
+
+    assert activations == {Activation.UNKNOWN}
+    assert Activation.ACTIVE not in activations
+    assert Activation.INACTIVE not in activations

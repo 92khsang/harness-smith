@@ -48,6 +48,18 @@ _Avoid_: container, area, layer
 A file holding zero or more Artifacts addressed by pointer rather than by path, such as a settings file holding hook declarations.
 _Avoid_: surface (reserved for scope boundaries), config file
 
+**Container Kind**:
+What an Artifact Container is: a settings file of one tier, a plugin's hook file, a plugin manifest, or a skill or subagent file. It says what the file is, never where its content came from or who may write it, which are Provenance and Management Authority.
+_Avoid_: container source, container type, provenance
+
+**Settings Layer**:
+Which layer of the runtime's settings precedence a container sits in: shared project, project-local, user, or managed policy. A container that is not a settings file has none. It is a different axis from Scope, which says which project a file affects, and from Capability Policy, which says what may be done on that Surface.
+_Avoid_: settings scope, settings source, precedence level
+
+**Evidence Source**:
+What a collector was asked to observe outside the repository. It names a place to look, not a container that was found; a scan reads the observations, never the environment.
+_Avoid_: container kind, settings layer
+
 **Locator**:
 Where an Artifact is found right now: a path, or a path and a pointer into an Artifact Container. A Locator is a position, not an identity, and may change without the Artifact changing.
 _Avoid_: id, identity, address

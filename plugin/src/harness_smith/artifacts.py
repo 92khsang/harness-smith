@@ -19,7 +19,7 @@ from enum import StrEnum
 from harness_smith.diagnostics import Diagnostic
 
 __all__ = [
-    "LAYER_BY_CONTAINER_SOURCE",
+    "LAYER_BY_CONTAINER_KIND",
     "SCOPE_BY_LAYER",
     "Activation",
     "ActivationCause",
@@ -28,7 +28,7 @@ __all__ = [
     "CapabilityPolicy",
     "CapabilityValue",
     "ContainerFormat",
-    "ContainerSource",
+    "ContainerKind",
     "Discovery",
     "DiscoveryReport",
     "GovernanceSet",
@@ -161,8 +161,11 @@ SCOPE_BY_LAYER: Mapping[SettingsLayer, Scope] = {
 }
 
 
-class ContainerSource(StrEnum):
+class ContainerKind(StrEnum):
     """What kind of thing a container is, said rather than inferred.
+
+    This is not Provenance and not Management Authority: it says what the file is, not where
+    its content came from or who may write it.
 
     A reader that had to tell a settings file from a plugin's hook file by looking at its
     Locator would be re-deriving what discovery already knew, and would get it wrong the first
@@ -182,15 +185,15 @@ class ContainerSource(StrEnum):
 
 # A settings container belongs to exactly one layer and everything else to none, so the two are
 # one table rather than two facts that can drift apart.
-LAYER_BY_CONTAINER_SOURCE: Mapping[ContainerSource, SettingsLayer | None] = {
-    ContainerSource.SHARED_PROJECT_SETTINGS: SettingsLayer.SHARED_PROJECT,
-    ContainerSource.PROJECT_LOCAL_SETTINGS: SettingsLayer.PROJECT_LOCAL,
-    ContainerSource.USER_SETTINGS: SettingsLayer.USER,
-    ContainerSource.MANAGED_POLICY_SETTINGS: SettingsLayer.MANAGED_POLICY,
-    ContainerSource.PLUGIN_HOOK_FILE: None,
-    ContainerSource.PLUGIN_MANIFEST: None,
-    ContainerSource.SKILL_FRONTMATTER: None,
-    ContainerSource.SUBAGENT_FRONTMATTER: None,
+LAYER_BY_CONTAINER_KIND: Mapping[ContainerKind, SettingsLayer | None] = {
+    ContainerKind.SHARED_PROJECT_SETTINGS: SettingsLayer.SHARED_PROJECT,
+    ContainerKind.PROJECT_LOCAL_SETTINGS: SettingsLayer.PROJECT_LOCAL,
+    ContainerKind.USER_SETTINGS: SettingsLayer.USER,
+    ContainerKind.MANAGED_POLICY_SETTINGS: SettingsLayer.MANAGED_POLICY,
+    ContainerKind.PLUGIN_HOOK_FILE: None,
+    ContainerKind.PLUGIN_MANIFEST: None,
+    ContainerKind.SKILL_FRONTMATTER: None,
+    ContainerKind.SUBAGENT_FRONTMATTER: None,
 }
 
 
@@ -253,6 +256,7 @@ class InventoriedArtifact:
         artifact_type: ArtifactType,
         scope: Scope,
         representation: Representation,
+        activation_cause: ActivationCause = ActivationCause.RUNTIME_STATE_NOT_READ,
     ) -> InventoriedArtifact:
         """An Artifact as runtime-native structural discovery alone can describe it.
 
@@ -263,6 +267,11 @@ class InventoriedArtifact:
         lock and Writer evidence that discovery never opens, and ``unknown`` refuses mutation,
         which is the safe answer to give before classification runs. Classification computes
         the authority and the remaining governance sets.
+
+        Activation is unknown either way, and the cause says what was not read. Nothing was
+        read of the runtime by default, which is ``runtime-state-not-read``; a scan given
+        runtime evidence did read it and still cannot say which managed source the runtime
+        selected, which is ``managed-policy-uninspectable``. Neither is a finding.
         """
         return cls(
             locator=locator,
@@ -272,7 +281,7 @@ class InventoriedArtifact:
             provenance=Provenance.AUTHORED,
             management_authority=ManagementAuthority.UNKNOWN,
             activation=Activation.UNKNOWN,
-            activation_cause=ActivationCause.RUNTIME_STATE_NOT_READ,
+            activation_cause=activation_cause,
             harness_relevant=True,
             sets=(GovernanceSet.INVENTORIED,),
         )
@@ -313,16 +322,16 @@ class ArtifactContainer:
 
     locator: str
     format: ContainerFormat
-    source: ContainerSource
+    kind: ContainerKind
     scope: Scope
     settings_layer: SettingsLayer | None = None
     holds: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        expected = LAYER_BY_CONTAINER_SOURCE[self.source]
+        expected = LAYER_BY_CONTAINER_KIND[self.kind]
         if self.settings_layer != expected:
             named = "no layer" if expected is None else f"the {expected.value} layer"
-            raise ValueError(f"a {self.source.value} container is in {named}")
+            raise ValueError(f"a {self.kind.value} container is in {named}")
         if self.settings_layer is not None and SCOPE_BY_LAYER[self.settings_layer] != self.scope:
             raise ValueError(
                 f"the {self.settings_layer.value} layer is in "
@@ -333,7 +342,7 @@ class ArtifactContainer:
         return {
             "locator": self.locator,
             "format": self.format.value,
-            "source": self.source.value,
+            "kind": self.kind.value,
             "scope": self.scope.value,
             "settingsLayer": None if self.settings_layer is None else self.settings_layer.value,
             "holds": sorted(self.holds),
@@ -371,12 +380,19 @@ class DiscoveryReport:
     containers: tuple[ArtifactContainer, ...] = ()
     observations: tuple[RuntimeComponentObservation, ...] = ()
 
+    def __post_init__(self) -> None:
+        """A report holds one answer per question, so that reading it needs no tie-breaking."""
+        _one_container_each(self.containers)
+        _held_once(self.containers)
+        _held_artifacts_exist(self.artifacts, self.containers)
+
     def container_of(self, artifact: InventoriedArtifact) -> ArtifactContainer | None:
         """The container holding ``artifact``, or nothing when it is addressed by path.
 
         Artifact identity is ``(scope, locator)`` and so is a container's, so the join is on
         both. Joining on the Locator alone would hand a repository hook the plugin container
-        that happens to sit at the same Locator.
+        that happens to sit at the same Locator. No container holds an Artifact another one in
+        its Scope also holds, so this returns the answer rather than choosing one.
         """
         for container in self.containers:
             if container.scope is artifact.scope and artifact.locator in container.holds:
@@ -435,3 +451,39 @@ class Discovery:
     report: DiscoveryReport
     diagnostics: tuple[Diagnostic, ...] = ()
     hooks: tuple[HookDeclaration, ...] = ()
+
+
+def _one_container_each(containers: tuple[ArtifactContainer, ...]) -> None:
+    """A container is one entry. Two at one ``(scope, locator)`` would make every lookup by
+    that pair a choice between two answers."""
+    identities = [(container.scope, container.locator) for container in containers]
+    if len(set(identities)) != len(identities):
+        raise ValueError("one container is inventoried once per Scope")
+
+
+def _held_once(containers: tuple[ArtifactContainer, ...]) -> None:
+    """An Artifact is held by one container. Two claiming it would make ``container_of`` depend
+    on the order the sections happen to be in."""
+    held = [(container.scope, locator) for container in containers for locator in container.holds]
+    if len(set(held)) != len(held):
+        raise ValueError("one Artifact is held by one container")
+
+
+def _held_artifacts_exist(
+    artifacts: tuple[InventoriedArtifact, ...], containers: tuple[ArtifactContainer, ...]
+) -> None:
+    """What a container holds is an Artifact in the inventory, at that container's Scope, and
+    an Artifact addressed by a pointer is held by something."""
+    inventoried = {(artifact.scope, artifact.locator) for artifact in artifacts}
+    held = {(container.scope, locator) for container in containers for locator in container.holds}
+    dangling = held - inventoried
+    if dangling:
+        raise ValueError(f"{sorted(dangling)[0][1]} is held by a container and not inventoried")
+    addressed = {
+        (artifact.scope, artifact.locator)
+        for artifact in artifacts
+        if artifact.representation is Representation.CONTAINER_ENTRY
+    }
+    orphaned = addressed - held
+    if orphaned:
+        raise ValueError(f"{sorted(orphaned)[0][1]} is addressed by a pointer into nothing")

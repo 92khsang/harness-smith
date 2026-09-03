@@ -114,7 +114,7 @@ def test_the_settings_file_is_a_container_holding_the_hooks_it_declares(
         {
             "locator": ".claude/settings.json",
             "format": "json",
-            "source": "shared-project-settings",
+            "kind": "shared-project-settings",
             "scope": "repository",
             "settingsLayer": "shared-project",
             "holds": [".claude/settings.json#/hooks/PostToolUse/0"],
@@ -219,7 +219,7 @@ def test_a_settings_file_with_no_hooks_block_declares_none(repository: Path) -> 
         {
             "locator": ".claude/settings.json",
             "format": "json",
-            "source": "shared-project-settings",
+            "kind": "shared-project-settings",
             "scope": "repository",
             "settingsLayer": "shared-project",
             "holds": [],

@@ -702,7 +702,7 @@
       "required": [
         "locator",
         "format",
-        "source",
+        "kind",
         "scope",
         "settingsLayer",
         "holds"
@@ -717,7 +717,7 @@
             "yaml-frontmatter"
           ]
         },
-        "source": {
+        "kind": {
           "enum": [
             "shared-project-settings",
             "project-local-settings",
@@ -764,12 +764,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "shared-project-settings"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -786,12 +786,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "project-local-settings"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -808,12 +808,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "user-settings"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -830,12 +830,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "managed-policy-settings"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -852,12 +852,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "plugin-hook-file"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -871,12 +871,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "plugin-manifest"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -890,12 +890,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "skill-frontmatter"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {
@@ -909,12 +909,12 @@
         {
           "if": {
             "properties": {
-              "source": {
+              "kind": {
                 "const": "subagent-frontmatter"
               }
             },
             "required": [
-              "source"
+              "kind"
             ]
           },
           "then": {

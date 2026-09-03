@@ -32,7 +32,7 @@ from harness_smith.artifacts import (
     ArtifactContainer,
     ArtifactType,
     ContainerFormat,
-    ContainerSource,
+    ContainerKind,
     Discovery,
     DiscoveryReport,
     HookDeclaration,
@@ -180,7 +180,7 @@ def _settings(root: Path) -> _Scan:
         ArtifactContainer(
             PROJECT_SETTINGS,
             ContainerFormat.JSON,
-            ContainerSource.SHARED_PROJECT_SETTINGS,
+            ContainerKind.SHARED_PROJECT_SETTINGS,
             Scope.REPOSITORY,
             SettingsLayer.SHARED_PROJECT,
             tuple(declaration.locator for declaration in hooks.declarations),

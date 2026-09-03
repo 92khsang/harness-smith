@@ -15,7 +15,7 @@ from harness_smith.artifacts import (
     ArtifactType,
     CapabilityValue,
     ContainerFormat,
-    ContainerSource,
+    ContainerKind,
     GovernanceSet,
     ManagementAuthority,
     Provenance,
@@ -79,8 +79,8 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
             [member.value for member in SettingsLayer],
         ),
         (
-            "$defs/artifactContainer/properties/source/enum",
-            [member.value for member in ContainerSource],
+            "$defs/artifactContainer/properties/kind/enum",
+            [member.value for member in ContainerKind],
         ),
         (
             "$defs/inventoriedArtifact/properties/representation/enum",
@@ -188,7 +188,7 @@ POPULATED_SURFACE_AUDIT: dict[str, Any] = {
             {
                 "locator": ".claude/settings.json",
                 "format": "json",
-                "source": "shared-project-settings",
+                "kind": "shared-project-settings",
                 "scope": "repository",
                 "settingsLayer": "shared-project",
                 "holds": [".claude/settings.json#/hooks/PreToolUse/0"],
@@ -348,19 +348,19 @@ def test_a_settings_container_must_name_its_layer(source: str) -> None:
     """The schema tells a settings container from a plugin's hook file by what the container
     says it is, not by re-reading its Locator."""
     with pytest.raises(jsonschema.ValidationError):
-        validate_document(with_container(source=source, settingsLayer=None))
+        validate_document(with_container(kind=source, settingsLayer=None))
 
 
 @pytest.mark.parametrize("source", ["plugin-hook-file", "plugin-manifest"])
 def test_a_container_that_is_not_settings_names_no_layer(source: str) -> None:
     with pytest.raises(jsonschema.ValidationError):
         validate_document(
-            with_container(source=source, scope="plugin", settingsLayer="shared-project")
+            with_container(kind=source, scope="plugin", settingsLayer="shared-project")
         )
 
 
 def test_a_settings_layer_pins_the_scope_it_sits_in() -> None:
     with pytest.raises(jsonschema.ValidationError):
         validate_document(
-            with_container(source="user-settings", scope="repository", settingsLayer="user")
+            with_container(kind="user-settings", scope="repository", settingsLayer="user")
         )

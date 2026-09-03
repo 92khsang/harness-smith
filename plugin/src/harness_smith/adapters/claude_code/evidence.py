@@ -12,7 +12,9 @@ two different moments.
 What comes out is a raw inventory: the declarations a readable file holds. It is not the policy
 in force. The managed tier picks one of four ranked sources, a merge setting can change that,
 and a policy helper can replace the lot for one session, so whether a declaration is in effect
-is a projection made elsewhere, out of evidence this does not have.
+is a projection made elsewhere, out of evidence this does not have. That is why activation here
+is unknown for ``managed-policy-uninspectable`` rather than for ``runtime-state-not-read``: the
+runtime state was read, and what it did not say is which managed source was selected.
 """
 
 from __future__ import annotations
@@ -22,10 +24,11 @@ from dataclasses import dataclass
 
 from harness_smith.adapters.claude_code import hooks as hook_container
 from harness_smith.artifacts import (
+    ActivationCause,
     ArtifactContainer,
     ArtifactType,
     ContainerFormat,
-    ContainerSource,
+    ContainerKind,
     Discovery,
     DiscoveryReport,
     HookDeclaration,
@@ -45,11 +48,11 @@ __all__ = ["discover_evidence"]
 # A managed policy is spread across a base file and the drop-ins beside it. Both are managed
 # policy settings, and each stays its own container so that a declaration keeps the file it came
 # from; which of them the runtime would merge first is a question for the effective policy.
-CONTAINER_SOURCES: Mapping[EvidenceSource, ContainerSource] = {
-    EvidenceSource.USER_SETTINGS: ContainerSource.USER_SETTINGS,
-    EvidenceSource.PROJECT_LOCAL_SETTINGS: ContainerSource.PROJECT_LOCAL_SETTINGS,
-    EvidenceSource.MANAGED_POLICY_BASE: ContainerSource.MANAGED_POLICY_SETTINGS,
-    EvidenceSource.MANAGED_POLICY_DROPIN: ContainerSource.MANAGED_POLICY_SETTINGS,
+CONTAINER_KINDS: Mapping[EvidenceSource, ContainerKind] = {
+    EvidenceSource.USER_SETTINGS: ContainerKind.USER_SETTINGS,
+    EvidenceSource.PROJECT_LOCAL_SETTINGS: ContainerKind.PROJECT_LOCAL_SETTINGS,
+    EvidenceSource.MANAGED_POLICY_BASE: ContainerKind.MANAGED_POLICY_SETTINGS,
+    EvidenceSource.MANAGED_POLICY_DROPIN: ContainerKind.MANAGED_POLICY_SETTINGS,
 }
 
 
@@ -86,7 +89,11 @@ def _read(document: EvidenceDocument) -> _Read:
     )
     artifacts = tuple(
         InventoriedArtifact.runtime_native(
-            declaration.locator, ArtifactType.HOOK, document.scope, Representation.CONTAINER_ENTRY
+            declaration.locator,
+            ArtifactType.HOOK,
+            document.scope,
+            Representation.CONTAINER_ENTRY,
+            ActivationCause.MANAGED_POLICY_UNINSPECTABLE,
         )
         for declaration in found.declarations
     )
@@ -101,7 +108,7 @@ def _container(document: EvidenceDocument, holds: tuple[str, ...]) -> ArtifactCo
     return ArtifactContainer(
         document.locator,
         ContainerFormat.JSON,
-        CONTAINER_SOURCES[document.source],
+        CONTAINER_KINDS[document.source],
         document.scope,
         document.settings_layer,
         holds,
