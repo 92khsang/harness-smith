@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 
 from harness_smith.governance.paths import normalised
 from harness_smith.governance.shape import closed, listed, mapping, one_of, required, text
-from harness_smith.yaml_document import YamlDocument, YamlDocumentState
+from harness_smith.text_file import TextFile, TextFileState
+from harness_smith.yaml_document import YamlDocumentState, parse_yaml_document
 
 __all__ = ["MANIFEST", "Manifest", "read_manifest"]
 
@@ -67,10 +68,18 @@ class Manifest:
         return self.present and not self.reason
 
 
-def read_manifest(document: YamlDocument, present: bool) -> Manifest:
-    """Validate a manifest document, or say why it cannot be read as one."""
-    if not present:
+def read_manifest(file: TextFile) -> Manifest:
+    """Validate what was read from the manifest's path, or say why it is not a manifest.
+
+    Whether there is a manifest at all is what that read answered. Nothing at the path is a
+    repository that declared nothing; anything else there is a manifest, whether or not it
+    turns out to be readable.
+    """
+    if file.state is TextFileState.ABSENT:
         return Manifest()
+    if file.state is TextFileState.UNREADABLE:
+        return Manifest(present=True, reason=file.reason)
+    document = parse_yaml_document(file.text)
     if document.state is not YamlDocumentState.PARSED:
         return Manifest(present=True, reason=document.reason)
     members = document.members

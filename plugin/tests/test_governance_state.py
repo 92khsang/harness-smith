@@ -363,3 +363,19 @@ def test_the_lock_records_an_approved_baseline_and_no_current_digest(tmp_path: P
     assert entry["baselineSha256"] == "b" * 64
     assert "currentSha256" not in entry
     assert entry["sha256"] == "a" * 64
+
+
+def test_a_path_that_is_not_a_readable_file_is_not_a_repository_that_declared_nothing(
+    tmp_path: Path,
+) -> None:
+    """Whether a governance file is there and what it says are one read. A directory at the
+    manifest's path answers "no file" to a separate existence check, while holding something
+    somebody meant as policy."""
+    root = write_tree(tmp_path / "repository", {"README.md": "# readme\n"})
+    (root / MANIFEST).mkdir()
+
+    governance = read_governance(root)
+
+    assert codes(governance) == ["HS-MANIFEST-INVALID"]
+    assert governance.manifest.present is True
+    assert governance.manifest.valid is False

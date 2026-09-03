@@ -6,6 +6,7 @@ consumes. Every document a run emits is validated against the result schema.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -291,3 +292,72 @@ def test_machine_local_settings_are_left_out_of_the_audit(repository: Path) -> N
     assert run.exit_code == 0
     assert artifacts(run) == []
     assert run.document["data"]["containers"] == []
+
+
+GOVERNANCE: Mapping[str, str] = {
+    "harness.manifest.yaml": "schemaVersion: 1\n",
+    "harness.lock.json": json.dumps(
+        {
+            "schemaVersion": 1,
+            "standard": {"id": "harness-smith", "version": "1.0.0"},
+            "entrypoint": {
+                "runtime": "claude-code",
+                "path": "CLAUDE.md",
+                "template": "claude-root",
+                "version": "1.0.0",
+            },
+            "artifacts": {},
+        },
+        indent=2,
+    ),
+}
+
+
+def test_a_repository_that_declared_nothing_is_audited_as_it_stands(repository: Path) -> None:
+    """Neither governance file being present is an ordinary repository, not a run that failed
+    to find its configuration."""
+    run = audit(repository, POPULATED)
+
+    assert run.exit_code == 0
+    assert run.diagnostic_codes == []
+
+
+def test_a_governance_pair_that_reads_leaves_the_audit_alone(repository: Path) -> None:
+    run = audit(repository, {**POPULATED, **GOVERNANCE})
+
+    assert run.exit_code == 0
+    assert run.diagnostic_codes == []
+    assert artifacts(run)
+
+
+def test_a_manifest_that_does_not_read_refuses_the_audit(repository: Path) -> None:
+    """Exit 2 is a pre-execution short-circuit, so a run that stops on its configuration emits
+    the finding and no report: a scan that should not have started has no partial result to
+    hand back."""
+    broken = {**POPULATED, "harness.manifest.yaml": "schemaVersion: 1\nrelations: {}\n"}
+
+    run = audit(repository, broken)
+
+    assert run.exit_code == 2
+    assert run.document["status"] == "usage-error"
+    assert run.diagnostic_codes == ["HS-MANIFEST-INVALID"]
+    assert run.document["data"] is None
+    assert run.document["diagnostics"][0]["remediation"] == "Fix the manifest"
+
+
+def test_a_lock_that_does_not_read_refuses_the_audit(repository: Path) -> None:
+    run = audit(repository, {**POPULATED, "harness.lock.json": "{not json\n"})
+
+    assert run.exit_code == 2
+    assert run.document["status"] == "usage-error"
+    assert run.diagnostic_codes == ["HS-LOCK-INVALID"]
+    assert run.document["data"] is None
+
+
+def test_both_governance_files_being_broken_names_both(repository: Path) -> None:
+    run = audit(
+        repository, {**POPULATED, "harness.manifest.yaml": "- one\n", "harness.lock.json": "[]\n"}
+    )
+
+    assert run.exit_code == 2
+    assert run.diagnostic_codes == ["HS-LOCK-INVALID", "HS-MANIFEST-INVALID"]

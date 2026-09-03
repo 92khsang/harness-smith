@@ -15,9 +15,8 @@ from pathlib import Path
 from harness_smith.diagnostics import Diagnostic
 from harness_smith.governance.lock import LOCK, Lock, read_lock
 from harness_smith.governance.manifest import MANIFEST, Manifest, read_manifest
-from harness_smith.json_document import read_json_document
+from harness_smith.text_file import read_text_file
 from harness_smith.vocabulary import Subject, SubjectKind
-from harness_smith.yaml_document import read_yaml_document
 
 __all__ = ["LOCK", "MANIFEST", "Governance", "Lock", "Manifest", "read_governance"]
 
@@ -30,13 +29,26 @@ class Governance:
     lock: Lock
     diagnostics: tuple[Diagnostic, ...] = ()
 
+    @property
+    def unread(self) -> bool:
+        """A governance file is there and did not read.
+
+        Absent is not one: a repository that declared nothing has declared nothing. This is
+        the state a caller stops on, rather than the presence of any diagnostic, which a
+        later finding of another severity would also satisfy.
+        """
+        return bool(self.manifest.reason or self.lock.reason)
+
 
 def read_governance(root: Path) -> Governance:
-    """Read and validate both governance files of the repository at ``root``."""
-    manifest_path = root / MANIFEST
-    lock_path = root / LOCK
-    manifest = read_manifest(read_yaml_document(manifest_path), manifest_path.is_file())
-    lock = read_lock(read_json_document(lock_path), lock_path.is_file())
+    """Read and validate both governance files of the repository at ``root``.
+
+    Each file is opened once, and that open is what decides whether the file is there. Asking
+    the filesystem first and reading afterwards would be two answers about two moments, and a
+    path that is not a regular file would answer the first question with silence.
+    """
+    manifest = read_manifest(read_text_file(root / MANIFEST))
+    lock = read_lock(read_text_file(root / LOCK))
     diagnostics = (
         *_finding("HS-MANIFEST-INVALID", MANIFEST, manifest.reason),
         *_finding("HS-LOCK-INVALID", LOCK, lock.reason),

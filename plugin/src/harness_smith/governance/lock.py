@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 
 from harness_smith.governance.paths import normalised
 from harness_smith.governance.shape import closed, mapping, one_of, required, text
-from harness_smith.json_document import JsonDocument, JsonDocumentState, own_repeated_names
+from harness_smith.json_document import JsonDocumentState, own_repeated_names, parse_json_document
+from harness_smith.text_file import TextFile, TextFileState
 
 __all__ = ["LOCK", "Lock", "read_lock"]
 
@@ -61,10 +62,18 @@ class Lock:
         return self.present and not self.reason
 
 
-def read_lock(document: JsonDocument, present: bool) -> Lock:
-    """Validate a lock document, or say why it cannot be read as one."""
-    if not present:
+def read_lock(file: TextFile) -> Lock:
+    """Validate what was read from the lock's path, or say why it is not a lock.
+
+    Whether there is a lock at all is what that read answered. Nothing at the path is a
+    repository with nothing non-authored in it; anything else there is a lock, whether or not
+    it turns out to be readable.
+    """
+    if file.state is TextFileState.ABSENT:
         return Lock()
+    if file.state is TextFileState.UNREADABLE:
+        return Lock(present=True, reason=file.reason)
+    document = parse_json_document(file.text)
     if document.state is not JsonDocumentState.PARSED:
         return Lock(present=True, reason=document.reason)
     members = document.members

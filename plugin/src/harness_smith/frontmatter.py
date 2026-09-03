@@ -21,6 +21,8 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from ruamel.yaml.error import MarkedYAMLError, YAMLError
 
+from harness_smith.text_file import TextFileState, read_text_file
+
 __all__ = ["Frontmatter", "FrontmatterState", "read_frontmatter", "read_frontmatter_file"]
 
 DELIMITER = "---"
@@ -91,15 +93,10 @@ def read_frontmatter_file(path: Path) -> Frontmatter:
     No reason names the path: a diagnostic carries the Locator in its subject, and messages
     stay free of absolute paths.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return Frontmatter.file_unreadable("the file is not valid UTF-8 text")
-    except OSError as error:
-        return Frontmatter.file_unreadable(
-            f"the file could not be read: {error.strerror or 'unknown error'}"
-        )
-    return read_frontmatter(text)
+    file = read_text_file(path)
+    if file.state is not TextFileState.PRESENT:
+        return Frontmatter.file_unreadable(file.reason)
+    return read_frontmatter(file.text)
 
 
 def _is_delimiter(line: str) -> bool:

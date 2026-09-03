@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from harness_smith.text_file import TextFileState, read_text_file
+
 __all__ = [
     "BYTE_ORDER_MARK",
     "JsonDocument",
@@ -138,18 +140,13 @@ def parse_json_bytes(data: bytes) -> JsonDocument:
 def read_json_document(path: Path) -> JsonDocument:
     """Read ``path``'s JSON. A file whose bytes never become text has no document.
 
-    No reason names the path: a diagnostic carries the Locator in its subject, and messages
-    stay free of absolute paths.
+    Nothing at the path and a file that would not open are one answer here: either way there
+    are no members to point at. A caller that has to tell the two apart reads the file itself.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return JsonDocument.file_unreadable("the file is not valid UTF-8 text")
-    except OSError as error:
-        return JsonDocument.file_unreadable(
-            f"the file could not be read: {error.strerror or 'unknown error'}"
-        )
-    return parse_json_document(text)
+    file = read_text_file(path)
+    if file.state is not TextFileState.PRESENT:
+        return JsonDocument.file_unreadable(file.reason)
+    return parse_json_document(file.text)
 
 
 def own_repeated_names(value: object) -> tuple[str, ...]:

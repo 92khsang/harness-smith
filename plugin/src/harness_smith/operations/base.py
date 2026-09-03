@@ -34,7 +34,10 @@ class OperationRequest:
 
 @dataclass(frozen=True)
 class OperationOutcome:
-    data: Mapping[str, object]
+    """What an operation produced. ``data`` is ``None`` for a run that produced no report,
+    which is a different answer from a report that found nothing."""
+
+    data: Mapping[str, object] | None
     diagnostics: tuple[Diagnostic, ...] = ()
     changes: tuple[Change, ...] = ()
 

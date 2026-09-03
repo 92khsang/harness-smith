@@ -1,10 +1,12 @@
-"""surface-audit: a thin report over the shared discovery primitive."""
+"""surface-audit: a thin report over the shared discovery primitive, once the repository's
+governance state has been read."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
 from harness_smith.adapters import claude_code
+from harness_smith.governance import read_governance
 from harness_smith.operations.base import (
     Operation,
     OperationOutcome,
@@ -33,6 +35,16 @@ class SurfaceAudit(Operation):
     )
 
     def run(self, request: OperationRequest) -> OperationOutcome:
+        """Read the repository's governance state, then report what is in the repository.
+
+        A governance file that is there and does not read stops the run before the scan. Exit
+        2 is a pre-execution short-circuit rather than an outcome a check arrived at: the
+        governance files are configuration, and a report emitted beside that finding would be
+        a partial result from a scan that should not have started.
+        """
+        governance = read_governance(request.repository_root)
+        if governance.unread:
+            return OperationOutcome(data=None, diagnostics=governance.diagnostics)
         discovery = claude_code.discover(DiscoveryRequest(request.repository_root))
         return OperationOutcome(
             data=discovery.report.as_document(), diagnostics=discovery.diagnostics

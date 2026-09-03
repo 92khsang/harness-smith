@@ -1,9 +1,9 @@
-"""Reading a whole YAML file.
+"""Reading a whole YAML file's text.
 
-The governance manifest is hand-edited YAML, so the same three failures a JSON container has
-apply to it and are kept apart for the same reason: the file's bytes never became text, the
-text is not YAML, or the YAML is not a mapping and so holds no keys to read. A caller chooses
-on the state rather than by reading the reason.
+The governance manifest is hand-edited YAML, so the two failures a text that is already in
+hand can have are kept apart: the text is not YAML, or the YAML is not a mapping and so holds
+no keys to read. A caller chooses on the state rather than by reading the reason. Whether
+there was a file to read at all is answered by ``text_file``, in the open that read it.
 
 A repeated key is refused by the parser rather than resolved. YAML 1.2 leaves a duplicate to
 the implementation, and which of two same-named keys survives decides what a manifest says
@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import MarkedYAMLError, YAMLError
@@ -27,7 +26,6 @@ __all__ = [
     "YamlDocument",
     "YamlDocumentState",
     "parse_yaml_document",
-    "read_yaml_document",
 ]
 
 BYTE_ORDER_MARK = "﻿"
@@ -35,7 +33,6 @@ BYTE_ORDER_MARK = "﻿"
 
 class YamlDocumentState(StrEnum):
     PARSED = "parsed"
-    FILE_UNREADABLE = "file-unreadable"
     UNPARSEABLE = "unparseable"
     NOT_A_MAPPING = "not-a-mapping"
 
@@ -60,10 +57,6 @@ class YamlDocument:
     def not_a_mapping(cls, reason: str) -> YamlDocument:
         return cls(YamlDocumentState.NOT_A_MAPPING, {}, reason)
 
-    @classmethod
-    def file_unreadable(cls, reason: str) -> YamlDocument:
-        return cls(YamlDocumentState.FILE_UNREADABLE, {}, reason)
-
 
 def parse_yaml_document(text: str) -> YamlDocument:
     """Read ``text``, which is a whole YAML file."""
@@ -80,23 +73,6 @@ def parse_yaml_document(text: str) -> YamlDocument:
         return YamlDocument.not_a_mapping(f"the file has a key that is not text: {unnamed[0]!r}")
     members: dict[str, object] = dict(loaded)
     return YamlDocument.parsed(members)
-
-
-def read_yaml_document(path: Path) -> YamlDocument:
-    """Read ``path``'s YAML. A file whose bytes never become text has no document.
-
-    No reason names the path: a diagnostic carries the Locator in its subject, and messages
-    stay free of absolute paths.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return YamlDocument.file_unreadable("the file is not valid UTF-8 text")
-    except OSError as error:
-        return YamlDocument.file_unreadable(
-            f"the file could not be read: {error.strerror or 'unknown error'}"
-        )
-    return parse_yaml_document(text)
 
 
 def _parser() -> YAML:
