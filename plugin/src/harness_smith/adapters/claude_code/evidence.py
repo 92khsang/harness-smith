@@ -14,7 +14,8 @@ in force. The managed tier picks one of four ranked sources, a merge setting can
 and a policy helper can replace the lot for one session, so whether a declaration is in effect
 is a projection made elsewhere, out of evidence this does not have. That is why activation here
 is unknown for ``managed-policy-uninspectable`` rather than for ``runtime-state-not-read``: the
-runtime state was read, and what it did not say is which managed source was selected.
+runtime state was read, and what it did not say is which managed source was selected. Whether
+that incompleteness is reported is the running operation's question, not this one's.
 """
 
 from __future__ import annotations

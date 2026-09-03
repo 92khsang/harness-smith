@@ -11,9 +11,11 @@ and LSP configuration, monitors, executables and the manifest itself have no Art
 all, so they are located rather than enumerated and reported as Runtime Component Observations.
 Having no type decides which operations apply to them; it does not decide what the adapter may
 do with the Surface they sit on, so their Capability Policy is looked up from their Scope like
-any other. A plugin's hooks are Artifacts too, and reading every hook source the runtime honours
-is a separate scan; resolving where a plugin's hooks live is ``manifest``'s job and reading them
-is not this one's.
+any other. A plugin's hooks are Artifacts too, and they are read at the locations
+``manifest`` resolved and nowhere else: the default file the runtime always loads, the
+additional files the manifest names, and the manifest itself where it writes hooks out in
+place. Which of those exist, and which spellings the runtime accepts, was settled once there;
+recomputing any of it here would be a second implementation of the same rules.
 
 Everything found here sits on the ``plugin`` Surface, this repository's own plugin product
 source. Classifying an installed third-party plugin as ``external`` is a separate scan's
@@ -23,20 +25,35 @@ question.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
+from harness_smith.adapters.claude_code import hooks as hook_container
 from harness_smith.adapters.claude_code import tree
 from harness_smith.adapters.claude_code.capability import capability
-from harness_smith.adapters.claude_code.manifest import MANIFEST, Component, Resolution, resolve
+from harness_smith.adapters.claude_code.manifest import (
+    HOOKS_MEMBER,
+    MANIFEST,
+    Component,
+    Resolution,
+    resolve,
+)
 from harness_smith.artifacts import (
+    ArtifactContainer,
     ArtifactType,
+    ContainerFormat,
+    ContainerKind,
     Discovery,
     DiscoveryReport,
+    HookDeclaration,
     InventoriedArtifact,
     Representation,
     RuntimeComponentObservation,
     Scope,
 )
+from harness_smith.diagnostics import Diagnostic
+from harness_smith.json_document import JsonDocumentState, read_json_document
+from harness_smith.vocabulary import Subject, SubjectKind
 
 __all__ = ["discover_plugin"]
 
@@ -62,12 +79,19 @@ def discover_plugin(root: Path) -> Discovery:
     """Scan the plugin rooted at ``root`` for the components its manifest and the runtime's
     defaults put there."""
     resolution = resolve(root)
+    hooks = _hooks(root, resolution)
     return Discovery(
         report=DiscoveryReport(
-            artifacts=(*_skill_artifacts(root, resolution), *_agents(root, resolution)),
+            artifacts=(
+                *_skill_artifacts(root, resolution),
+                *_agents(root, resolution),
+                *hooks.artifacts,
+            ),
+            containers=hooks.containers,
             observations=_observations(root, resolution),
         ),
-        diagnostics=resolution.diagnostics,
+        diagnostics=(*resolution.diagnostics, *hooks.diagnostics),
+        hooks=hooks.declarations,
     )
 
 
@@ -162,3 +186,103 @@ def _observations(root: Path, resolution: Resolution) -> tuple[RuntimeComponentO
 
 def _observation(component: str, location: str) -> RuntimeComponentObservation:
     return RuntimeComponentObservation(location, component, SCOPE, capability(SCOPE))
+
+
+@dataclass(frozen=True)
+class _Hooks:
+    """The hook containers a plugin holds, and what was found wrong reading them."""
+
+    containers: tuple[ArtifactContainer, ...] = ()
+    artifacts: tuple[InventoriedArtifact, ...] = ()
+    declarations: tuple[HookDeclaration, ...] = ()
+    diagnostics: tuple[Diagnostic, ...] = ()
+
+
+def _hooks(root: Path, resolution: Resolution) -> _Hooks:
+    """Every hook the plugin declares, at the locations the manifest resolved.
+
+    The manifest is one location among them and is read from the document the resolution
+    already parsed. The default file and each additional file stay separate containers, and a
+    declaration repeated across them is two declarations at two Locators: which of them the
+    runtime ends up running is a question about the effective harness, not about what is
+    written down.
+    """
+    found = _Hooks()
+    for location in resolution.locations[Component.HOOKS]:
+        if location == MANIFEST:
+            found = _joined(found, _inline(resolution))
+            continue
+        path = root / location
+        if not path.is_file():
+            continue
+        read = hook_container.read(read_json_document(path), location, SCOPE)
+        found = _joined(found, _container_read(read, location, ContainerKind.PLUGIN_HOOK_FILE))
+    return found
+
+
+def _inline(resolution: Resolution) -> _Hooks:
+    """Hooks a manifest writes out in place, addressed by a pointer into the manifest.
+
+    The field takes the events object directly or as entries of a list that also holds paths,
+    so the pointer that reaches each one differs while everything under it is read one way.
+    """
+    document = resolution.manifest
+    if document.state is not JsonDocumentState.PARSED:
+        return _Hooks()
+    declared = document.members.get(HOOKS_MEMBER)
+    reads: list[hook_container.Hooks] = []
+    if isinstance(declared, dict):
+        reads.append(hook_container.read_events(declared, MANIFEST, f"/{HOOKS_MEMBER}", SCOPE))
+    elif isinstance(declared, list):
+        reads.extend(
+            hook_container.read_events(entry, MANIFEST, f"/{HOOKS_MEMBER}/{index}", SCOPE)
+            for index, entry in enumerate(declared)
+            if isinstance(entry, dict)
+        )
+    if not reads:
+        return _Hooks()
+    return _container_read(_merged(reads), MANIFEST, ContainerKind.PLUGIN_MANIFEST)
+
+
+def _merged(reads: list[hook_container.Hooks]) -> hook_container.Hooks:
+    """One manifest is one container, however many inline declarations it holds."""
+    refused = next((read for read in reads if read.code), None)
+    if refused is not None:
+        return refused
+    return hook_container.Hooks(
+        tuple(declaration for read in reads for declaration in read.declarations)
+    )
+
+
+def _container_read(read: hook_container.Hooks, locator: str, kind: ContainerKind) -> _Hooks:
+    """One container's declarations, or the container holding nothing when it could not be
+    read, which is a different report from one that holds nothing."""
+    if read.code:
+        finding = Diagnostic.of(
+            read.code, Subject(SubjectKind.CONTAINER, locator), message=read.reason
+        )
+        return _Hooks(
+            containers=(ArtifactContainer(locator, ContainerFormat.JSON, kind, SCOPE),),
+            diagnostics=(finding,),
+        )
+    holds = tuple(declaration.locator for declaration in read.declarations)
+    artifacts = tuple(
+        InventoriedArtifact.runtime_native(
+            declaration.locator, ArtifactType.HOOK, SCOPE, Representation.CONTAINER_ENTRY
+        )
+        for declaration in read.declarations
+    )
+    return _Hooks(
+        containers=(ArtifactContainer(locator, ContainerFormat.JSON, kind, SCOPE, None, holds),),
+        artifacts=artifacts,
+        declarations=read.declarations,
+    )
+
+
+def _joined(left: _Hooks, right: _Hooks) -> _Hooks:
+    return _Hooks(
+        left.containers + right.containers,
+        left.artifacts + right.artifacts,
+        left.declarations + right.declarations,
+        left.diagnostics + right.diagnostics,
+    )

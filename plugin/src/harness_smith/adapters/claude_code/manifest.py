@@ -73,19 +73,25 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePath
 
 from harness_smith.adapters.claude_code import tree
 from harness_smith.diagnostics import Diagnostic
-from harness_smith.json_document import JsonDocumentState, own_repeated_names, read_json_document
+from harness_smith.json_document import (
+    JsonDocument,
+    JsonDocumentState,
+    own_repeated_names,
+    read_json_document,
+)
 from harness_smith.vocabulary import Subject, SubjectKind
 
-__all__ = ["MANIFEST", "Component", "Merge", "Resolution", "resolve"]
+__all__ = ["HOOKS_MEMBER", "MANIFEST", "Component", "Merge", "Resolution", "resolve"]
 
 MANIFEST = ".claude-plugin/plugin.json"
 EXPERIMENTAL_MEMBER = "experimental"
+HOOKS_MEMBER = "hooks"
 
 # A command definition names its Markdown file here; a definition that writes the command out in
 # the manifest instead is addressed by a pointer into it, which #35 owns.
@@ -162,11 +168,14 @@ class Resolution:
     """Where each component's locations are, once the manifest has had its say.
 
     A location is a Locator relative to the plugin root, and is where the component would be
-    rather than a claim that anything is there.
+    rather than a claim that anything is there. The manifest the locations were read from is
+    kept, so a scan that needs the declarations inside it does not parse it a second time and
+    risk a second answer.
     """
 
     locations: Mapping[Component, tuple[str, ...]]
     diagnostics: tuple[Diagnostic, ...] = ()
+    manifest: JsonDocument = field(default_factory=JsonDocument.absent)
 
 
 @dataclass(frozen=True)
@@ -219,7 +228,7 @@ def resolve(root: Path) -> Resolution:
         if shadowed is not None:
             diagnostics.append(shadowed)
 
-    return Resolution(locations, tuple(diagnostics))
+    return Resolution(locations, tuple(diagnostics), document)
 
 
 def _kept_default(spec: ComponentSpec) -> tuple[str, ...]:

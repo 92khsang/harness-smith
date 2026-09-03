@@ -20,7 +20,7 @@ from harness_smith.json_document import (
     repeated_names,
 )
 
-__all__ = ["CONTAINER_FINDINGS", "HOOKS_MEMBER", "Hooks", "read"]
+__all__ = ["CONTAINER_FINDINGS", "HOOKS_MEMBER", "Hooks", "read", "read_events"]
 
 # The one member of a settings file this adapter reads; everything else in it is
 # configuration the runtime owns and harness-smith leaves alone.
@@ -73,6 +73,17 @@ def read(document: JsonDocument, container: str, scope: Scope) -> Hooks:
         return Hooks()
     if not isinstance(events, dict):
         return _invalid(f"the `{HOOKS_MEMBER}` member is not an object of hook events")
+    return read_events(events, container, f"/{HOOKS_MEMBER}", scope)
+
+
+def read_events(events: Mapping[str, object], container: str, pointer: str, scope: Scope) -> Hooks:
+    """The declarations of an events object already located at ``pointer`` inside ``container``.
+
+    A plugin manifest writes its inline hooks as the same object a settings file keeps under
+    `hooks`, but reaches it by a different route: directly, or as one entry of a list that also
+    holds paths. The pointer is therefore the caller's to supply, and everything below it is
+    read one way.
+    """
     repeated_events = own_repeated_names(events)
     if repeated_events:
         return _invalid(f"the `{repeated_events[0]}` hook event is declared more than once")
@@ -86,7 +97,7 @@ def read(document: JsonDocument, container: str, scope: Scope) -> Hooks:
                 return _invalid(
                     f"the `{event}` hook event holds a declaration that is not an object"
                 )
-            locator = f"{container}#/{HOOKS_MEMBER}/{_pointer_token(event)}/{index}"
+            locator = f"{container}#{pointer}/{_pointer_token(event)}/{index}"
             digested = _digest(locator, declaration, scope)
             if digested is None:
                 return _invalid(_digest_reason(event, index, declaration))

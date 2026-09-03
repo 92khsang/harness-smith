@@ -81,6 +81,11 @@ class JsonDocument:
     reason: str
 
     @classmethod
+    def absent(cls) -> JsonDocument:
+        """No document at all, which is what a plugin with no manifest has."""
+        return cls(JsonDocumentState.FILE_UNREADABLE, {}, "there is no document")
+
+    @classmethod
     def parsed(cls, members: Mapping[str, object]) -> JsonDocument:
         return cls(JsonDocumentState.PARSED, members, "")
 

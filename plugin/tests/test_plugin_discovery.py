@@ -21,6 +21,7 @@ from harness_smith.artifacts import (
     ArtifactType,
     CapabilityPolicy,
     CapabilityValue,
+    ContainerKind,
     Discovery,
     GovernanceSet,
     ManagementAuthority,
@@ -891,3 +892,168 @@ def test_hook_locations_resolve_for_the_scan_that_reads_them(tmp_path: Path) -> 
     resolution = resolve(root)
 
     assert resolution.locations[Component.HOOKS] == ("hooks/hooks.json", "config/hooks.json")
+
+
+DECLARATION = {"matcher": "Bash", "hooks": [{"type": "command", "command": "audit.sh"}]}
+
+
+def hook_file(*events: str) -> str:
+    return json.dumps({"hooks": {event: [DECLARATION] for event in events}}, indent=2) + "\n"
+
+
+def hooks_of(discovery: Discovery) -> list[str]:
+    return locators(discovery, ArtifactType.HOOK)
+
+
+def containers_of(discovery: Discovery) -> list[tuple[str, str, int]]:
+    return sorted(
+        (entry.locator, entry.kind.value, len(entry.holds)) for entry in discovery.report.containers
+    )
+
+
+def test_the_default_hook_file_is_read_without_a_manifest(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {"hooks/hooks.json": hook_file("Stop")})
+
+    assert hooks_of(discovery) == ["hooks/hooks.json#/hooks/Stop/0"]
+    assert containers_of(discovery) == [("hooks/hooks.json", "plugin-hook-file", 1)]
+
+
+def test_an_additional_hook_file_the_manifest_names_is_read_beside_the_default(
+    tmp_path: Path,
+) -> None:
+    """The runtime loads `hooks/hooks.json` automatically and the manifest names files in
+    addition to it, so both are containers and neither hides the other."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", hooks="./hooks/extra.json"),
+            "hooks/hooks.json": hook_file("Stop"),
+            "hooks/extra.json": hook_file("PreToolUse"),
+        },
+    )
+
+    assert hooks_of(discovery) == [
+        "hooks/extra.json#/hooks/PreToolUse/0",
+        "hooks/hooks.json#/hooks/Stop/0",
+    ]
+    assert containers_of(discovery) == [
+        ("hooks/extra.json", "plugin-hook-file", 1),
+        ("hooks/hooks.json", "plugin-hook-file", 1),
+    ]
+
+
+def test_hooks_a_manifest_writes_out_in_place_are_held_by_the_manifest(tmp_path: Path) -> None:
+    discovery = scan(
+        tmp_path,
+        {MANIFEST: manifest(name="p", hooks={"Stop": [DECLARATION]}), "hooks/hooks.json": "{}\n"},
+    )
+
+    assert hooks_of(discovery) == [f"{MANIFEST}#/hooks/Stop/0"]
+    assert (MANIFEST, "plugin-manifest", 1) in containers_of(discovery)
+
+
+def test_a_manifest_list_may_mix_a_path_with_hooks_written_out_in_place(tmp_path: Path) -> None:
+    """Each inline entry is reached by its own pointer, and one manifest stays one container."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(
+                name="p",
+                hooks=[
+                    "./hooks/extra.json",
+                    {"Stop": [DECLARATION]},
+                    {"Notification": [DECLARATION]},
+                ],
+            ),
+            "hooks/extra.json": hook_file("PreToolUse"),
+        },
+    )
+
+    assert hooks_of(discovery) == [
+        f"{MANIFEST}#/hooks/1/Stop/0",
+        f"{MANIFEST}#/hooks/2/Notification/0",
+        "hooks/extra.json#/hooks/PreToolUse/0",
+    ]
+    assert (MANIFEST, "plugin-manifest", 2) in containers_of(discovery)
+
+
+def test_a_hook_path_the_manifest_syntax_refuses_is_not_revived_here(tmp_path: Path) -> None:
+    """Where a location may be is settled once, in the manifest resolution. Reading a path it
+    refused would be a second implementation of the same rules."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", hooks="hooks/extra.json"),
+            "hooks/extra.json": hook_file("Stop"),
+        },
+    )
+
+    assert hooks_of(discovery) == []
+
+
+def test_naming_the_default_file_explicitly_leaves_one_container(tmp_path: Path) -> None:
+    """Two ways of reaching one file is still one file."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", hooks="./hooks/hooks.json"),
+            "hooks/hooks.json": hook_file("Stop"),
+        },
+    )
+
+    assert containers_of(discovery) == [("hooks/hooks.json", "plugin-hook-file", 1)]
+
+
+def test_a_hook_container_that_cannot_be_read_holds_nothing_and_says_why(
+    tmp_path: Path,
+) -> None:
+    discovery = scan(tmp_path, {"hooks/hooks.json": "{not json\n"})
+
+    assert hooks_of(discovery) == []
+    assert containers_of(discovery) == [("hooks/hooks.json", "plugin-hook-file", 0)]
+    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
+
+
+def test_the_same_declaration_in_two_files_is_two_hooks(tmp_path: Path) -> None:
+    """A Locator is a position, so the same bytes in two places are two Artifacts. Which of them
+    the runtime ends up running is a question about the effective harness."""
+    discovery = scan(
+        tmp_path,
+        {
+            MANIFEST: manifest(name="p", hooks="./hooks/extra.json"),
+            "hooks/hooks.json": hook_file("Stop"),
+            "hooks/extra.json": hook_file("Stop"),
+        },
+    )
+
+    assert hooks_of(discovery) == [
+        "hooks/extra.json#/hooks/Stop/0",
+        "hooks/hooks.json#/hooks/Stop/0",
+    ]
+    assert len({declaration.declaration_digest for declaration in discovery.hooks}) == 1
+
+
+def test_a_plugin_hook_is_in_plugin_scope_and_held_by_its_own_container(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {"hooks/hooks.json": hook_file("Stop")})
+
+    (hook,) = [
+        artifact for artifact in discovery.report.artifacts if artifact.type is ArtifactType.HOOK
+    ]
+    container = discovery.report.container_of(hook)
+
+    assert hook.scope is Scope.PLUGIN
+    assert hook.representation is Representation.CONTAINER_ENTRY
+    assert hook.activation is Activation.UNKNOWN
+    assert hook.activation_cause is ActivationCause.RUNTIME_STATE_NOT_READ
+    assert container is not None
+    assert container.scope is Scope.PLUGIN
+    assert container.kind is ContainerKind.PLUGIN_HOOK_FILE
+    assert container.settings_layer is None
+
+
+def test_a_declaration_digest_is_computed_for_every_plugin_hook(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {"hooks/hooks.json": hook_file("Stop", "PreToolUse")})
+
+    assert len(discovery.hooks) == 2
+    assert all(len(entry.declaration_digest) == 64 for entry in discovery.hooks)
+    assert {entry.scope for entry in discovery.hooks} == {Scope.PLUGIN}

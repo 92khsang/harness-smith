@@ -271,7 +271,13 @@ class InventoriedArtifact:
         Activation is unknown either way, and the cause says what was not read. Nothing was
         read of the runtime by default, which is ``runtime-state-not-read``; a scan given
         runtime evidence did read it and still cannot say which managed source the runtime
-        selected, which is ``managed-policy-uninspectable``. Neither is a finding.
+        selected, which is ``managed-policy-uninspectable``.
+
+        The cause does not decide whether anything is reported. That follows from the cause,
+        the mode that was asked for, and the operation's own contract: not reading runtime
+        state offline is correct behaviour rather than a finding, while a mode that reads it
+        and could not is the incomplete check `HS-EFFECTIVE-HARNESS-UNCERTAIN` names. A report
+        records the cause and leaves that projection to whoever ran the mode.
         """
         return cls(
             locator=locator,
