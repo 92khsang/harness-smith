@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from harness_smith.artifacts import (
     ArtifactContainer,
     ArtifactType,
@@ -19,6 +21,7 @@ from harness_smith.artifacts import (
     Representation,
     RuntimeComponentObservation,
     Scope,
+    SettingsLayer,
 )
 
 POLICY = CapabilityPolicy(
@@ -84,3 +87,19 @@ def test_containers_sharing_a_locator_are_ordered_by_scope() -> None:
     ordered = [entry["scope"] for entry in section(report, "containers")]
 
     assert ordered == ["plugin", "user-global"]
+
+
+def test_a_container_whose_layer_and_scope_disagree_is_refused() -> None:
+    """Each settings layer sits in exactly one Scope. A container declaring a pair that cannot
+    both be true would let a consumer trust either one."""
+    with pytest.raises(ValueError, match="layer is in"):
+        ArtifactContainer(
+            SHARED, ContainerFormat.JSON, Scope.USER_GLOBAL, SettingsLayer.SHARED_PROJECT
+        )
+
+
+def test_a_container_that_is_not_a_settings_file_has_no_layer() -> None:
+    container = ArtifactContainer(SHARED, ContainerFormat.JSON, Scope.PLUGIN)
+
+    assert container.settings_layer is None
+    assert container.as_document()["settingsLayer"] is None

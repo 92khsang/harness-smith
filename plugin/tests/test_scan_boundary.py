@@ -14,8 +14,14 @@ from pathlib import Path
 import pytest
 
 from harness_smith.adapters.claude_code import discover
-from harness_smith.artifacts import ArtifactType
-from harness_smith.scan import DiscoveryRequest, RuntimeEvidenceSnapshot
+from harness_smith.artifacts import ArtifactType, Scope, SettingsLayer
+from harness_smith.scan import (
+    DiscoveryRequest,
+    EvidenceDocument,
+    EvidenceSource,
+    EvidenceStatus,
+    RuntimeEvidenceSnapshot,
+)
 from tests.support import write_tree
 
 SETTINGS = '{"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "a"}]}]}}'
@@ -122,3 +128,97 @@ def test_a_plugin_artifact_keeps_its_own_scope_in_the_composed_report(tmp_path: 
         (".claude/skills/audit/SKILL.md", "repository"),
         ("skills/audit/SKILL.md", "plugin"),
     }
+
+
+USER_LOCATOR = "~/.claude/settings.json"
+
+
+def collected(content: bytes) -> RuntimeEvidenceSnapshot:
+    """What a collector observed for the user's own settings, and nothing more."""
+    return RuntimeEvidenceSnapshot(
+        requested=(EvidenceSource.USER_SETTINGS,),
+        documents=(
+            EvidenceDocument(
+                source=EvidenceSource.USER_SETTINGS,
+                scope=Scope.USER_GLOBAL,
+                layer=SettingsLayer.USER,
+                locator=USER_LOCATOR,
+                status=EvidenceStatus.PRESENT,
+                content=content,
+            ),
+        ),
+    )
+
+
+def test_one_snapshot_answers_the_same_on_any_machine(
+    tmp_path: Path, machine: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The snapshot is the evidence. What the machine holds around it is not."""
+    root = repository(tmp_path)
+    snapshot = collected(SETTINGS.encode())
+    before = discover(
+        DiscoveryRequest(repository_root=root, runtime_evidence=snapshot)
+    ).report.as_document()
+
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+
+    assert (
+        discover(
+            DiscoveryRequest(repository_root=root, runtime_evidence=snapshot)
+        ).report.as_document()
+        == before
+    )
+
+
+def test_a_source_that_changed_after_it_was_observed_does_not_change_the_report(
+    tmp_path: Path,
+) -> None:
+    """The collector observed one moment. Reopening the Locator would let the report describe
+    two, and there is no moment at which both were true."""
+    root = repository(tmp_path)
+    observed = tmp_path / "observed-settings.json"
+    observed.write_text(SETTINGS, encoding="utf-8")
+    snapshot = RuntimeEvidenceSnapshot(
+        requested=(EvidenceSource.USER_SETTINGS,),
+        documents=(
+            EvidenceDocument(
+                source=EvidenceSource.USER_SETTINGS,
+                scope=Scope.USER_GLOBAL,
+                layer=SettingsLayer.USER,
+                locator=str(observed),
+                status=EvidenceStatus.PRESENT,
+                content=observed.read_bytes(),
+            ),
+        ),
+    )
+    request = DiscoveryRequest(repository_root=root, runtime_evidence=snapshot)
+    before = discover(request).report.as_document()
+
+    observed.unlink()
+
+    assert discover(request).report.as_document() == before
+    assert [entry.locator for entry in discover(request).report.containers] == [
+        ".claude/settings.json",
+        str(observed),
+    ]
+
+
+def test_an_observed_hook_keeps_the_scope_and_layer_it_was_observed_in(tmp_path: Path) -> None:
+    discovery = discover(
+        DiscoveryRequest(
+            repository_root=repository(tmp_path), runtime_evidence=collected(SETTINGS.encode())
+        )
+    )
+    container = next(
+        entry for entry in discovery.report.containers if entry.locator == USER_LOCATOR
+    )
+    hook = next(
+        artifact
+        for artifact in discovery.report.artifacts
+        if artifact.type is ArtifactType.HOOK and artifact.scope is Scope.USER_GLOBAL
+    )
+
+    assert container.settings_layer is SettingsLayer.USER
+    assert container.holds == (hook.locator,)
+    assert hook.locator == f"{USER_LOCATOR}#/hooks/Stop/0"

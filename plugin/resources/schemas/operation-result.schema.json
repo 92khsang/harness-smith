@@ -703,6 +703,7 @@
         "locator",
         "format",
         "scope",
+        "settingsLayer",
         "holds"
       ],
       "properties": {
@@ -724,13 +725,106 @@
             "managed-policy"
           ]
         },
+        "settingsLayer": {
+          "oneOf": [
+            {
+              "enum": [
+                "shared-project",
+                "project-local",
+                "user",
+                "managed-policy"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "holds": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/locator"
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "settingsLayer": {
+                "const": "shared-project"
+              }
+            },
+            "required": [
+              "settingsLayer"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "repository"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "settingsLayer": {
+                "const": "project-local"
+              }
+            },
+            "required": [
+              "settingsLayer"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "repository"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "settingsLayer": {
+                "const": "user"
+              }
+            },
+            "required": [
+              "settingsLayer"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "user-global"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "settingsLayer": {
+                "const": "managed-policy"
+              }
+            },
+            "required": [
+              "settingsLayer"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "managed-policy"
+              }
+            }
+          }
+        }
+      ]
     },
     "runtimeComponentObservation": {
       "type": "object",

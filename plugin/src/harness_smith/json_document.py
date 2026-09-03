@@ -30,6 +30,7 @@ __all__ = [
     "JsonDocumentState",
     "JsonObject",
     "own_repeated_names",
+    "parse_json_bytes",
     "parse_json_document",
     "read_json_document",
     "repeated_names",
@@ -117,6 +118,16 @@ def parse_json_document(text: str) -> JsonDocument:
         return JsonDocument.not_an_object(f"the file is a JSON {_shape(loaded)}, not an object")
     members: dict[str, object] = loaded
     return JsonDocument.parsed(members)
+
+
+def parse_json_bytes(data: bytes) -> JsonDocument:
+    """Read bytes that were observed elsewhere. Bytes that never become text hold no
+    document, exactly as an unreadable file does."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return JsonDocument.file_unreadable("the file is not valid UTF-8 text")
+    return parse_json_document(text)
 
 
 def read_json_document(path: Path) -> JsonDocument:

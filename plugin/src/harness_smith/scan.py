@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from harness_smith.artifacts import Scope
+from harness_smith.artifacts import SCOPE_BY_LAYER, Scope, SettingsLayer
 
 __all__ = [
     "DiscoveryRequest",
@@ -74,19 +74,26 @@ class EvidenceSource(StrEnum):
     MANAGED_POLICY_DROPIN_DIRECTORY = "managed-policy-dropin-directory"
 
 
-class SettingsLayer(StrEnum):
-    """Which settings layer a file belongs to, which is a different question from Scope.
+# The sources with one expected location. A collection that was asked for them answers for
+# each, present or not, so that a collector that skipped one cannot read as a machine that had
+# none. Drop-in documents are not among them: how many there are is what the directory says.
+SINGULAR_SOURCES: tuple[EvidenceSource, ...] = (
+    EvidenceSource.USER_SETTINGS,
+    EvidenceSource.PROJECT_LOCAL_SETTINGS,
+    EvidenceSource.MANAGED_POLICY_BASE,
+    EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
+)
 
-    Scope says which project a file affects and where it sits in ownership. The layer says
-    whether it is settings a project shares, a personal overlay, a user's own global
-    configuration, or an administrator's policy. Neither answers the other, and neither
-    changes the Capability Policy of the Surface, which is a function of Scope alone.
+
+def eligible_dropin(locator: str) -> bool:
+    """Whether the runtime would read this entry of the drop-in directory.
+
+    "Claude Code ignores hidden files and files that don't end in `.json`". The listing keeps
+    every entry that was seen, so what was observed and what was adopted stay separate answers;
+    this is the rule that separates them.
     """
-
-    PROJECT = "project"
-    PROJECT_LOCAL = "project-local"
-    USER = "user"
-    POLICY = "policy"
+    name = locator.rsplit("/", 1)[-1]
+    return name.endswith(".json") and not name.startswith(".")
 
 
 @dataclass(frozen=True)
@@ -102,7 +109,7 @@ class EvidenceDocument:
     cause: EvidenceCause | None = None
 
     def __post_init__(self) -> None:
-        _check(self.locator, self.status, self.cause)
+        _check(self.locator, self.status, self.cause, self.scope, self.layer)
         if (self.content is not None) is not (self.status is EvidenceStatus.PRESENT):
             raise ValueError(
                 "content is exactly what was observed, so only a present source has it"
@@ -127,17 +134,36 @@ class EvidenceDirectory:
     cause: EvidenceCause | None = None
 
     def __post_init__(self) -> None:
-        _check(self.locator, self.status, self.cause)
+        _check(self.locator, self.status, self.cause, self.scope, self.layer)
         if self.entries and self.status is not EvidenceStatus.PRESENT:
             raise ValueError("a directory that was not observed holds no entries")
 
 
 @dataclass(frozen=True)
 class RuntimeEvidenceSnapshot:
-    """Everything a collector observed for one run, and nothing about what to do with it."""
+    """Everything a collector observed for one run, and nothing about what to do with it.
 
+    ``requested`` is what the collector was asked to observe, and every one of those sources
+    answers for itself. Without it an empty snapshot would read as "every runtime source was
+    checked and none exists", which is what a collector that failed to run also looks like, and
+    a missed collection would pass as a clean machine.
+    """
+
+    requested: tuple[EvidenceSource, ...] = ()
     documents: tuple[EvidenceDocument, ...] = ()
     directories: tuple[EvidenceDirectory, ...] = ()
+
+    def __post_init__(self) -> None:
+        records: tuple[EvidenceDocument | EvidenceDirectory, ...] = (
+            *self.documents,
+            *self.directories,
+        )
+        observed = {record.source for record in records}
+        missing = [source for source in self.requested if source not in observed]
+        if missing:
+            raise ValueError(f"the {missing[0].value} source was requested and never answered for")
+        _one_record_each(self.documents, self.directories)
+        _dropins_belong_to_their_directory(self.documents, self.directories)
 
 
 @dataclass(frozen=True)
@@ -152,11 +178,73 @@ class DiscoveryRequest:
     plugin_roots: tuple[Path, ...] = ()
     runtime_evidence: RuntimeEvidenceSnapshot | None = None
 
+    def __post_init__(self) -> None:
+        """The roots are canonical, so how a caller happened to spell one cannot change the
+        report: the same directory named twice, or named through ``x/../x``, is one root."""
+        canonical = dict.fromkeys(sorted(root.resolve() for root in self.plugin_roots))
+        object.__setattr__(self, "plugin_roots", tuple(canonical))
 
-def _check(locator: str, status: EvidenceStatus, cause: EvidenceCause | None) -> None:
+
+def _check(
+    locator: str,
+    status: EvidenceStatus,
+    cause: EvidenceCause | None,
+    scope: Scope,
+    layer: SettingsLayer,
+) -> None:
     """The invariants that keep "we looked and found nothing" distinguishable from the rest."""
     if not locator:
         raise ValueError("evidence keeps the Locator it was expected at, even when absent")
+    if SCOPE_BY_LAYER[layer] != scope:
+        raise ValueError(
+            f"the {layer.value} layer is in {SCOPE_BY_LAYER[layer].value} scope, not {scope.value}"
+        )
     unresolved = {EvidenceStatus.UNREADABLE, EvidenceStatus.UNSUPPORTED}
     if (cause is not None) is not (status in unresolved):
         raise ValueError("a cause says why a source yielded nothing, and only then")
+
+
+def _one_record_each(
+    documents: tuple[EvidenceDocument, ...], directories: tuple[EvidenceDirectory, ...]
+) -> None:
+    """One source is observed once. A repeat is two answers to one question, and nothing here
+    says which of them the run actually saw."""
+    records: tuple[EvidenceDocument | EvidenceDirectory, ...] = (*documents, *directories)
+    singular = [record.source for record in records if record.source in SINGULAR_SOURCES]
+    repeated = {source for source in singular if singular.count(source) > 1}
+    if repeated:
+        raise ValueError(f"the {sorted(repeated)[0].value} source is observed more than once")
+    locators = [document.locator for document in documents]
+    if len(set(locators)) != len(locators):
+        raise ValueError("two documents were observed at one Locator")
+
+
+def _dropins_belong_to_their_directory(
+    documents: tuple[EvidenceDocument, ...], directories: tuple[EvidenceDirectory, ...]
+) -> None:
+    """A drop-in exists because a directory listing named it, so the two agree or neither is
+    trustworthy: every entry the runtime would read has been read, and nothing was read that
+    the listing never showed."""
+    dropins = {
+        document.locator
+        for document in documents
+        if document.source is EvidenceSource.MANAGED_POLICY_DROPIN
+    }
+    listed = [
+        directory
+        for directory in directories
+        if directory.source is EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY
+    ]
+    if not listed:
+        if dropins:
+            raise ValueError("a drop-in was observed without the directory that lists it")
+        return
+    directory = listed[0]
+    if tuple(sorted(set(directory.entries))) != directory.entries:
+        raise ValueError("a directory listing is ordered and holds each entry once")
+    expected = {entry for entry in directory.entries if eligible_dropin(entry)}
+    if dropins != expected:
+        unread = sorted(expected - dropins)
+        unlisted = sorted(dropins - expected)
+        missing = unread[0] if unread else unlisted[0]
+        raise ValueError(f"the drop-in listing and the documents disagree about {missing}")

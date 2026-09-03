@@ -20,6 +20,7 @@ from harness_smith.artifacts import (
     Provenance,
     Representation,
     Scope,
+    SettingsLayer,
 )
 from harness_smith.diagnostics import DIAGNOSTIC_REGISTRY
 from harness_smith.operations import DECLARED_OPERATIONS
@@ -71,6 +72,10 @@ def test_the_operation_enum_is_the_declared_operation_vocabulary() -> None:
         (
             "$defs/artifactContainer/properties/scope/enum",
             [member.value for member in Scope],
+        ),
+        (
+            "$defs/artifactContainer/properties/settingsLayer/oneOf/0/enum",
+            [member.value for member in SettingsLayer],
         ),
         (
             "$defs/inventoriedArtifact/properties/representation/enum",
@@ -179,6 +184,7 @@ POPULATED_SURFACE_AUDIT: dict[str, Any] = {
                 "locator": ".claude/settings.json",
                 "format": "json",
                 "scope": "repository",
+                "settingsLayer": "shared-project",
                 "holds": [".claude/settings.json#/hooks/PreToolUse/0"],
             }
         ],

@@ -13,12 +13,13 @@ collected, so a run cannot depend on the machine it happened to run on.
 
 from __future__ import annotations
 
+from harness_smith.adapters.claude_code.evidence import discover_evidence
 from harness_smith.adapters.claude_code.plugin import discover_plugin
 from harness_smith.adapters.claude_code.repository import discover as discover_repository
 from harness_smith.artifacts import Discovery, DiscoveryReport
 from harness_smith.scan import DiscoveryRequest
 
-__all__ = ["discover", "discover_plugin", "discover_repository"]
+__all__ = ["discover", "discover_evidence", "discover_plugin", "discover_repository"]
 
 
 def discover(request: DiscoveryRequest) -> Discovery:
@@ -30,6 +31,8 @@ def discover(request: DiscoveryRequest) -> Discovery:
     """
     scans = [discover_repository(request.repository_root)]
     scans.extend(discover_plugin(root) for root in request.plugin_roots)
+    if request.runtime_evidence is not None:
+        scans.append(discover_evidence(request.runtime_evidence))
     return Discovery(
         report=DiscoveryReport(
             artifacts=tuple(entry for scan in scans for entry in scan.report.artifacts),

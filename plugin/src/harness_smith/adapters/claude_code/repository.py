@@ -38,6 +38,7 @@ from harness_smith.artifacts import (
     InventoriedArtifact,
     Representation,
     Scope,
+    SettingsLayer,
 )
 from harness_smith.diagnostics import Diagnostic
 from harness_smith.frontmatter import Frontmatter, FrontmatterState, read_frontmatter_file
@@ -179,6 +180,7 @@ def _settings(root: Path) -> _Scan:
             PROJECT_SETTINGS,
             ContainerFormat.JSON,
             Scope.REPOSITORY,
+            SettingsLayer.SHARED_PROJECT,
             tuple(declaration.locator for declaration in hooks.declarations),
         ),
     )

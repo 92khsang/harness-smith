@@ -142,7 +142,7 @@ def test_a_drop_in_directory_that_is_present_and_empty_says_so() -> None:
     directory = EvidenceDirectory(
         source=EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
         scope=Scope.MANAGED_POLICY,
-        layer=SettingsLayer.POLICY,
+        layer=SettingsLayer.MANAGED_POLICY,
         locator=DROPIN_DIRECTORY,
         status=EvidenceStatus.PRESENT,
     )
@@ -155,7 +155,7 @@ def test_a_drop_in_directory_keeps_the_entries_that_were_observed() -> None:
     directory = EvidenceDirectory(
         source=EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
         scope=Scope.MANAGED_POLICY,
-        layer=SettingsLayer.POLICY,
+        layer=SettingsLayer.MANAGED_POLICY,
         locator=DROPIN_DIRECTORY,
         status=EvidenceStatus.PRESENT,
         entries=(f"{DROPIN_DIRECTORY}/10-telemetry.json", f"{DROPIN_DIRECTORY}/20-security.json"),
@@ -169,7 +169,7 @@ def test_a_directory_that_was_not_observed_holds_no_entries() -> None:
         EvidenceDirectory(
             source=EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
             scope=Scope.MANAGED_POLICY,
-            layer=SettingsLayer.POLICY,
+            layer=SettingsLayer.MANAGED_POLICY,
             locator=DROPIN_DIRECTORY,
             status=EvidenceStatus.ABSENT,
             entries=(f"{DROPIN_DIRECTORY}/10-telemetry.json",),
@@ -188,3 +188,132 @@ def test_a_settings_layer_is_not_a_scope() -> None:
 
     assert local.scope is Scope.REPOSITORY
     assert local.layer is SettingsLayer.PROJECT_LOCAL
+
+
+def directory(**changes: object) -> EvidenceDirectory:
+    fields: dict[str, object] = {
+        "source": EvidenceSource.MANAGED_POLICY_DROPIN_DIRECTORY,
+        "scope": Scope.MANAGED_POLICY,
+        "layer": SettingsLayer.MANAGED_POLICY,
+        "locator": DROPIN_DIRECTORY,
+        "status": EvidenceStatus.PRESENT,
+    }
+    fields.update(changes)
+    return EvidenceDirectory(**fields)  # type: ignore[arg-type]
+
+
+def dropin(name: str) -> EvidenceDocument:
+    return document(
+        source=EvidenceSource.MANAGED_POLICY_DROPIN,
+        scope=Scope.MANAGED_POLICY,
+        layer=SettingsLayer.MANAGED_POLICY,
+        locator=f"{DROPIN_DIRECTORY}/{name}",
+    )
+
+
+def test_a_requested_source_answers_for_itself_even_when_it_is_not_there() -> None:
+    """An empty snapshot is a collection that did not run, not a machine with nothing on it."""
+    with pytest.raises(ValueError, match="requested and never answered for"):
+        RuntimeEvidenceSnapshot(requested=(EvidenceSource.USER_SETTINGS,))
+
+
+def test_a_requested_source_is_answered_by_an_absence() -> None:
+    snapshot = RuntimeEvidenceSnapshot(
+        requested=(EvidenceSource.USER_SETTINGS,),
+        documents=(document(status=EvidenceStatus.ABSENT, content=None),),
+    )
+
+    assert snapshot.documents[0].status is EvidenceStatus.ABSENT
+
+
+def test_a_source_answered_twice_is_refused() -> None:
+    """Two answers to one question, and nothing says which the run saw."""
+    with pytest.raises(ValueError, match="observed more than once"):
+        RuntimeEvidenceSnapshot(documents=(document(), document(content=b'{"hooks": {}}')))
+
+
+def test_a_drop_in_needs_the_directory_that_lists_it() -> None:
+    with pytest.raises(ValueError, match="without the directory that lists it"):
+        RuntimeEvidenceSnapshot(documents=(dropin("10-a.json"),))
+
+
+def test_every_entry_the_runtime_would_read_has_been_read() -> None:
+    with pytest.raises(ValueError, match="disagree about"):
+        RuntimeEvidenceSnapshot(
+            documents=(dropin("10-a.json"),),
+            directories=(
+                directory(
+                    entries=(f"{DROPIN_DIRECTORY}/10-a.json", f"{DROPIN_DIRECTORY}/20-b.json")
+                ),
+            ),
+        )
+
+
+def test_nothing_is_read_that_the_listing_never_showed() -> None:
+    with pytest.raises(ValueError, match="disagree about"):
+        RuntimeEvidenceSnapshot(
+            documents=(dropin("10-a.json"),),
+            directories=(directory(entries=(f"{DROPIN_DIRECTORY}/20-b.json",)),),
+        )
+
+
+def test_the_listing_keeps_what_the_runtime_would_skip_without_reading_it() -> None:
+    """ "Claude Code ignores hidden files and files that don't end in `.json`". What was seen and
+    what was adopted stay separate answers, so the listing keeps both."""
+    snapshot = RuntimeEvidenceSnapshot(
+        documents=(dropin("10-a.json"),),
+        directories=(
+            directory(
+                entries=(
+                    f"{DROPIN_DIRECTORY}/.hidden.json",
+                    f"{DROPIN_DIRECTORY}/10-a.json",
+                    f"{DROPIN_DIRECTORY}/notes.txt",
+                )
+            ),
+        ),
+    )
+
+    assert len(snapshot.directories[0].entries) == 3
+    assert len(snapshot.documents) == 1
+
+
+def test_a_listing_is_ordered_and_holds_each_entry_once() -> None:
+    with pytest.raises(ValueError, match="ordered and holds each entry once"):
+        RuntimeEvidenceSnapshot(
+            directories=(
+                directory(
+                    entries=(f"{DROPIN_DIRECTORY}/20-b.json", f"{DROPIN_DIRECTORY}/10-a.json")
+                ),
+            ),
+            documents=(dropin("10-a.json"), dropin("20-b.json")),
+        )
+
+
+def test_a_layer_and_a_scope_that_disagree_are_refused() -> None:
+    """Each layer sits in exactly one Scope, so the pair is checked rather than trusted."""
+    with pytest.raises(ValueError, match="layer is in"):
+        document(layer=SettingsLayer.MANAGED_POLICY, scope=Scope.USER_GLOBAL)
+
+
+def test_plugin_roots_are_canonical_however_a_caller_spelled_them(tmp_path: Path) -> None:
+    root = tmp_path / "product"
+    root.mkdir()
+
+    request = DiscoveryRequest(
+        repository_root=tmp_path,
+        plugin_roots=(root, tmp_path / "product" / ".." / "product", root),
+    )
+
+    assert request.plugin_roots == (root.resolve(),)
+
+
+def test_the_order_roots_arrive_in_does_not_survive_into_the_request(tmp_path: Path) -> None:
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    for root in (first, second):
+        root.mkdir()
+
+    assert (
+        DiscoveryRequest(repository_root=tmp_path, plugin_roots=(second, first)).plugin_roots
+        == DiscoveryRequest(repository_root=tmp_path, plugin_roots=(first, second)).plugin_roots
+    )

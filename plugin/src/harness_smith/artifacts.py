@@ -12,12 +12,14 @@ components that have no type at all.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
 from harness_smith.diagnostics import Diagnostic
 
 __all__ = [
+    "SCOPE_BY_LAYER",
     "Activation",
     "ActivationCause",
     "ArtifactContainer",
@@ -35,6 +37,7 @@ __all__ = [
     "Representation",
     "RuntimeComponentObservation",
     "Scope",
+    "SettingsLayer",
 ]
 
 
@@ -127,6 +130,33 @@ class GovernanceSet(StrEnum):
     UNCLASSIFIED = "unclassified"
     OBSERVED = "observed"
     GOVERNED_HARNESS = "governed-harness"
+
+
+class SettingsLayer(StrEnum):
+    """Which settings layer a container belongs to, which is a different question from Scope.
+
+    Scope says which project a file affects and where it sits in ownership; the layer says
+    whether it is settings a project shares, a personal overlay, a user's own global
+    configuration, or an administrator's policy. Two containers in `repository` Scope can be
+    different layers, and an operation deciding whether it may write one needs the layer that
+    Scope does not carry. Neither axis changes Capability Policy, which is a function of Scope
+    alone.
+    """
+
+    SHARED_PROJECT = "shared-project"
+    PROJECT_LOCAL = "project-local"
+    USER = "user"
+    MANAGED_POLICY = "managed-policy"
+
+
+# Each layer sits in exactly one Scope, so a container declaring both is checked rather than
+# trusted: the pair is the one place the two axes have to agree.
+SCOPE_BY_LAYER: Mapping[SettingsLayer, Scope] = {
+    SettingsLayer.SHARED_PROJECT: Scope.REPOSITORY,
+    SettingsLayer.PROJECT_LOCAL: Scope.REPOSITORY,
+    SettingsLayer.USER: Scope.USER_GLOBAL,
+    SettingsLayer.MANAGED_POLICY: Scope.MANAGED_POLICY,
+}
 
 
 class ContainerFormat(StrEnum):
@@ -236,19 +266,31 @@ class ArtifactContainer:
     """A file holding zero or more Artifacts addressed by pointer rather than by path.
 
     A container carries the Scope it was found in, so the same containing file at the same
-    Locator in two Scopes is two entries rather than one.
+    Locator in two Scopes is two entries rather than one, and the settings layer where it has
+    one, so that a reader following a Hook to the container it is held in learns whether it is
+    shared settings or a personal overlay without parsing a Locator. A container that is not a
+    settings file has no layer.
     """
 
     locator: str
     format: ContainerFormat
     scope: Scope
+    settings_layer: SettingsLayer | None = None
     holds: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.settings_layer is not None and SCOPE_BY_LAYER[self.settings_layer] != self.scope:
+            raise ValueError(
+                f"the {self.settings_layer.value} layer is in "
+                f"{SCOPE_BY_LAYER[self.settings_layer].value} scope, not {self.scope.value}"
+            )
 
     def as_document(self) -> dict[str, object]:
         return {
             "locator": self.locator,
             "format": self.format.value,
             "scope": self.scope.value,
+            "settingsLayer": None if self.settings_layer is None else self.settings_layer.value,
             "holds": sorted(self.holds),
         }
 
