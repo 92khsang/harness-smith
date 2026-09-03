@@ -1,10 +1,7 @@
-"""The Claude Code runtime adapter: the locations this runtime defines and loads from.
+"""Runtime-native structural discovery over a repository.
 
-Everything Claude-Code-specific lives here. Runtime-native structural discovery walks only the
-locations the runtime itself declares, so a scan is bounded by ``.claude/`` and the two
-accepted project entry-point locations rather than by the whole repository tree. Locations the
-Harness Standard prescribes, and artifacts found because something points at them, are the
-other two discovery layers and are not this function's business.
+A scan is bounded by ``.claude/`` and the two accepted project entry-point locations rather
+than by the whole repository tree, because those are the locations the runtime itself declares.
 
 The runtime behaviour this encodes, from the Claude Code documentation:
 
@@ -18,9 +15,9 @@ The runtime behaviour this encodes, from the Claude Code documentation:
   (https://code.claude.com/docs/en/slash-commands)
 
 A deeper ``SKILL.md`` is not a project skill. A plugin reaches one by declaring its path in the
-plugin manifest, which is the adapter's manifest-aware discovery, and a nested project skill
-lives under its own subtree's ``.claude/skills/``, which needs the exclusion rules that bound a
-repository-wide walk. Neither is discovered here.
+plugin manifest, which ``plugin`` discovers, and a nested project skill lives under its own
+subtree's ``.claude/skills/``, which needs the exclusion rules that bound a repository-wide
+walk. Neither is discovered here.
 """
 
 from __future__ import annotations
@@ -31,18 +28,13 @@ from pathlib import Path
 from typing import assert_never
 
 from harness_smith.artifacts import (
-    Activation,
-    ActivationCause,
     ArtifactContainer,
     ArtifactType,
     ContainerFormat,
     Discovery,
     DiscoveryReport,
-    GovernanceSet,
     HookDeclaration,
     InventoriedArtifact,
-    ManagementAuthority,
-    Provenance,
     Representation,
     Scope,
 )
@@ -117,27 +109,8 @@ def discover(root: Path) -> Discovery:
 def _artifact(
     locator: str, artifact_type: ArtifactType, representation: Representation
 ) -> InventoriedArtifact:
-    """A repository artifact as discovery alone can describe it.
-
-    Discovery establishes location, type and representation. Provenance is authored until a
-    lock records otherwise; everything scanned here is a location the runtime loads from, so
-    the artifact is harness-relevant and Inventoried by construction. Management Authority
-    reads as ``unknown`` because resolving it needs the manifest, the lock and Writer evidence
-    that discovery never opens, and ``unknown`` refuses mutation, which is the safe answer to
-    give before classification runs. Classification computes the authority and the remaining
-    governance sets.
-    """
-    return InventoriedArtifact(
-        locator=locator,
-        type=artifact_type,
-        scope=Scope.REPOSITORY,
-        representation=representation,
-        provenance=Provenance.AUTHORED,
-        management_authority=ManagementAuthority.UNKNOWN,
-        activation=Activation.UNKNOWN,
-        activation_cause=ActivationCause.RUNTIME_STATE_NOT_READ,
-        harness_relevant=True,
-        sets=(GovernanceSet.INVENTORIED,),
+    return InventoriedArtifact.runtime_native(
+        locator, artifact_type, Scope.REPOSITORY, representation
     )
 
 

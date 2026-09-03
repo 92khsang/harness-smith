@@ -173,6 +173,37 @@ class InventoriedArtifact:
     harness_relevant: bool
     sets: tuple[GovernanceSet, ...]
 
+    @classmethod
+    def runtime_native(
+        cls,
+        locator: str,
+        artifact_type: ArtifactType,
+        scope: Scope,
+        representation: Representation,
+    ) -> InventoriedArtifact:
+        """An Artifact as runtime-native structural discovery alone can describe it.
+
+        Discovery establishes location, type, Scope and Representation. Provenance is authored
+        until a lock records otherwise; every location scanned this way is one the runtime
+        loads from, so the artifact is harness-relevant and Inventoried by construction.
+        Management Authority reads as ``unknown`` because resolving it needs the manifest, the
+        lock and Writer evidence that discovery never opens, and ``unknown`` refuses mutation,
+        which is the safe answer to give before classification runs. Classification computes
+        the authority and the remaining governance sets.
+        """
+        return cls(
+            locator=locator,
+            type=artifact_type,
+            scope=scope,
+            representation=representation,
+            provenance=Provenance.AUTHORED,
+            management_authority=ManagementAuthority.UNKNOWN,
+            activation=Activation.UNKNOWN,
+            activation_cause=ActivationCause.RUNTIME_STATE_NOT_READ,
+            harness_relevant=True,
+            sets=(GovernanceSet.INVENTORIED,),
+        )
+
     def as_document(self) -> dict[str, object]:
         return {
             "locator": self.locator,
