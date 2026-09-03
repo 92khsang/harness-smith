@@ -21,7 +21,16 @@ POPULATED: Mapping[str, str] = {
     ".claude/skills/audit/SKILL.md": "---\nname: audit\n---\n\n# audit\n",
     ".claude/commands/report.md": "Write the report.\n",
     ".claude/agents/reviewer.md": "---\nname: reviewer\n---\n\n# reviewer\n",
-    ".claude/settings.json": '{"hooks": {}}\n',
+    ".claude/settings.json": (
+        "{\n"
+        '  "hooks": {\n'
+        '    "PostToolUse": [\n'
+        '      {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "fmt.sh"}]}\n'
+        "    ]\n"
+        "  },\n"
+        '  "permissions": {"allow": ["Bash(ls:*)"]}\n'
+        "}\n"
+    ),
     "README.md": "# not part of the harness\n",
 }
 
@@ -52,6 +61,7 @@ def test_a_populated_repository_reports_every_runtime_native_artifact(
         (".claude/commands/report.md", "skill"),
         (".claude/rules/python/typing.md", "rule"),
         (".claude/rules/style.md", "rule"),
+        (".claude/settings.json#/hooks/PostToolUse/0", "hook"),
         (".claude/skills/audit/SKILL.md", "skill"),
         ("CLAUDE.md", "entry-point"),
     ]
@@ -93,11 +103,19 @@ def test_a_rule_whose_bytes_are_not_text_is_not_reported_as_broken_yaml(
     assert "UTF-8" in finding["message"]
 
 
-def test_the_settings_file_is_reported_as_a_container(repository: Path) -> None:
+def test_the_settings_file_is_a_container_holding_the_hooks_it_declares(
+    repository: Path,
+) -> None:
+    """The file holds a hook and unrelated configuration. It is a container either way, and
+    the configuration next to the hook produces nothing."""
     run = audit(repository, POPULATED)
 
     assert run.document["data"]["containers"] == [
-        {"locator": ".claude/settings.json", "format": "json", "holds": []}
+        {
+            "locator": ".claude/settings.json",
+            "format": "json",
+            "holds": [".claude/settings.json#/hooks/PostToolUse/0"],
+        }
     ]
 
 
@@ -109,6 +127,7 @@ def test_a_command_form_skill_carries_its_legacy_representation(repository: Path
     assert representations[".claude/commands/report.md"] == "legacy-command"
     assert representations[".claude/skills/audit/SKILL.md"] == "directory"
     assert representations["CLAUDE.md"] == "file"
+    assert representations[".claude/settings.json#/hooks/PostToolUse/0"] == "container-entry"
 
 
 def test_two_project_entry_points_is_a_violation_that_still_reports_the_inventory(
@@ -154,6 +173,71 @@ def test_the_text_format_names_each_discovered_artifact(repository: Path) -> Non
     run = run_cli("surface-audit", cwd=repository)
 
     assert run.exit_code == 0
-    assert "artifacts: 6" in run.stdout
+    assert "artifacts: 7" in run.stdout
     assert "entry-point" in run.stdout
     assert "CLAUDE.md" in run.stdout
+
+
+def test_a_hook_declared_in_project_settings_is_reported_as_an_artifact(
+    repository: Path,
+) -> None:
+    run = audit(repository, POPULATED)
+
+    hooks = [entry for entry in artifacts(run) if entry["type"] == "hook"]
+
+    assert [entry["locator"] for entry in hooks] == [".claude/settings.json#/hooks/PostToolUse/0"]
+    assert hooks[0]["scope"] == "repository"
+    assert hooks[0]["managementAuthority"] == "unknown"
+
+
+def test_two_identical_declarations_are_reported_at_their_two_positions(
+    repository: Path,
+) -> None:
+    """A Locator is a position, not an identity, so identical declarations are neither merged
+    nor told apart by something invented for the purpose."""
+    declaration = '{"matcher": "Bash", "hooks": [{"type": "command", "command": "audit.sh"}]}'
+    twice = f'{{"hooks": {{"PreToolUse": [{declaration}, {declaration}]}}}}'
+
+    run = audit(repository, {".claude/settings.json": twice})
+
+    assert run.exit_code == 0
+    assert [entry["locator"] for entry in artifacts(run)] == [
+        ".claude/settings.json#/hooks/PreToolUse/0",
+        ".claude/settings.json#/hooks/PreToolUse/1",
+    ]
+
+
+def test_a_settings_file_with_no_hooks_block_declares_none(repository: Path) -> None:
+    run = audit(repository, {".claude/settings.json": '{"permissions": {"allow": []}}'})
+
+    assert run.exit_code == 0
+    assert artifacts(run) == []
+    assert run.document["data"]["containers"] == [
+        {"locator": ".claude/settings.json", "format": "json", "holds": []}
+    ]
+
+
+def test_a_malformed_container_is_a_violation_and_resolves_no_hook(repository: Path) -> None:
+    run = audit(repository, {".claude/settings.json": '{"hooks": {"Stop": [{"matcher": ""}'})
+
+    assert run.exit_code == 1
+    assert run.diagnostic_codes == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
+    finding = run.document["diagnostics"][0]
+    assert finding["subject"] == {"kind": "container", "locator": ".claude/settings.json"}
+    assert finding["remediation"] == "Fix the file"
+    assert artifacts(run) == []
+
+
+def test_machine_local_settings_are_left_out_of_the_audit(repository: Path) -> None:
+    run = audit(
+        repository,
+        {
+            ".claude/settings.local.json": (
+                '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x.sh"}]}]}}'
+            )
+        },
+    )
+
+    assert run.exit_code == 0
+    assert artifacts(run) == []
+    assert run.document["data"]["containers"] == []

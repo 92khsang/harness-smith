@@ -61,11 +61,13 @@ class Scope(StrEnum):
 class Representation(StrEnum):
     """How an Artifact is written down, where the runtime accepts a type in more than one
     form. A command-form skill is a Skill in its legacy-command representation, not a type of
-    its own."""
+    its own, and a hook declared inside a settings file is a Hook in its container-entry
+    representation rather than a file of its own."""
 
     FILE = "file"
     DIRECTORY = "directory"
     LEGACY_COMMAND = "legacy-command"
+    CONTAINER_ENTRY = "container-entry"
 
 
 class Provenance(StrEnum):
@@ -201,7 +203,7 @@ class ArtifactContainer:
         return {
             "locator": self.locator,
             "format": self.format.value,
-            "holds": list(self.holds),
+            "holds": sorted(self.holds),
         }
 
 
@@ -231,7 +233,8 @@ class DiscoveryReport:
     observations: tuple[RuntimeComponentObservation, ...] = ()
 
     def as_document(self) -> dict[str, object]:
-        """Each section is ordered by Locator, because a report is read, compared and diffed."""
+        """Every list of Locators is ordered by Locator, the sections and what a container
+        holds alike, because a report is read, compared and diffed."""
         by_locator = attrgetter("locator")
         return {
             "artifacts": [entry.as_document() for entry in sorted(self.artifacts, key=by_locator)],

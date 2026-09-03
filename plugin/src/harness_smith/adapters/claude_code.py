@@ -46,6 +46,11 @@ from harness_smith.artifacts import (
 )
 from harness_smith.diagnostics import Diagnostic
 from harness_smith.frontmatter import Frontmatter, FrontmatterState, read_frontmatter_file
+from harness_smith.json_document import (
+    JsonDocument,
+    JsonDocumentState,
+    read_json_document,
+)
 from harness_smith.vocabulary import Subject, SubjectKind
 
 PROJECT_ENTRY_POINTS: tuple[str, ...] = ("CLAUDE.md", ".claude/CLAUDE.md")
@@ -54,6 +59,10 @@ SKILLS_DIRECTORY = ".claude/skills"
 COMMANDS_DIRECTORY = ".claude/commands"
 AGENTS_DIRECTORY = ".claude/agents"
 PROJECT_SETTINGS = ".claude/settings.json"
+
+# The one member of a settings file this adapter reads; everything else in it is
+# configuration the runtime owns and harness-smith leaves alone.
+HOOKS_MEMBER = "hooks"
 
 # A project skill is exactly one directory deep; a Markdown artifact directory is walked whole.
 PROJECT_SKILLS = "*/SKILL.md"
@@ -66,15 +75,24 @@ class _Scan:
 
     artifacts: tuple[InventoriedArtifact, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
+    containers: tuple[ArtifactContainer, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Declarations:
+    """The pointers a container's hook declarations sit at, or why none could be addressed."""
+
+    pointers: tuple[str, ...] = ()
+    reason: str = ""
 
 
 def discover(root: Path) -> Discovery:
     """Scan ``root`` for the artifacts the Claude Code runtime defines locations for."""
-    scans = (_entry_points(root), _rules(root), _skills(root), _agents(root))
+    scans = (_entry_points(root), _rules(root), _skills(root), _agents(root), _settings(root))
     return Discovery(
         report=DiscoveryReport(
             artifacts=tuple(artifact for scan in scans for artifact in scan.artifacts),
-            containers=_containers(root),
+            containers=tuple(container for scan in scans for container in scan.containers),
         ),
         diagnostics=tuple(diagnostic for scan in scans for diagnostic in scan.diagnostics),
     )
@@ -190,12 +208,71 @@ def _agents(root: Path) -> _Scan:
     )
 
 
-def _containers(root: Path) -> tuple[ArtifactContainer, ...]:
-    """Project settings hold hook declarations, so the file is a container rather than an
-    artifact. ``.claude/settings.local.json`` is machine-local and is never discovered."""
-    if not (root / PROJECT_SETTINGS).is_file():
-        return ()
-    return (ArtifactContainer(locator=PROJECT_SETTINGS, format=ContainerFormat.JSON),)
+def _settings(root: Path) -> _Scan:
+    """Project settings hold hook declarations, so the file is an Artifact Container rather
+    than an Artifact, and the hooks in it are artifacts addressed by a pointer into it.
+    ``.claude/settings.local.json`` is machine-local and is never discovered."""
+    path = root / PROJECT_SETTINGS
+    if not path.is_file():
+        return _Scan()
+    declarations = _declarations(read_json_document(path))
+    locators = tuple(f"{PROJECT_SETTINGS}#{pointer}" for pointer in declarations.pointers)
+    container = (ArtifactContainer(PROJECT_SETTINGS, ContainerFormat.JSON, locators),)
+    if declarations.reason:
+        unparseable = Diagnostic.of(
+            "HS-HOOK-CONTAINER-UNPARSEABLE",
+            Subject(SubjectKind.CONTAINER, PROJECT_SETTINGS),
+            message=declarations.reason,
+        )
+        return _Scan(diagnostics=(unparseable,), containers=container)
+    artifacts = tuple(
+        _artifact(locator, ArtifactType.HOOK, Representation.CONTAINER_ENTRY)
+        for locator in locators
+    )
+    return _Scan(artifacts, containers=container)
+
+
+def _declarations(document: JsonDocument) -> _Declarations:
+    """Where each hook declaration in ``document`` sits, as a JSON Pointer into it.
+
+    One declaration is one matcher group. The matcher and the ordered actions it runs are a
+    single execution declaration, and reordering those actions changes what runs, so the group
+    is addressed whole at ``/hooks/<event>/<index>`` rather than per action.
+
+    Addressing is all or nothing. A container read only in part would hand out pointers
+    computed past a shape the reader did not expect, and those pointers would address
+    something other than the declarations they name.
+
+    The specification names ``HS-HOOK-CONTAINER-UNPARSEABLE`` for a containing file that does
+    not parse. A file that parses into a shape no pointer can be computed from reaches the
+    same outcome by another route, nothing in the registry describes it more narrowly, and
+    reporting it under this code beats leaving a declared hook unreported.
+    """
+    if document.state is not JsonDocumentState.PARSED:
+        return _Declarations(reason=document.reason)
+    events = document.members.get(HOOKS_MEMBER)
+    if events is None:
+        return _Declarations()
+    if not isinstance(events, dict):
+        return _Declarations(reason=f"the `{HOOKS_MEMBER}` member is not an object of hook events")
+    pointers: list[str] = []
+    for event in sorted(events):
+        declarations = events[event]
+        if not isinstance(declarations, list):
+            return _Declarations(reason=f"the `{event}` hook event is not an array of declarations")
+        for index, declaration in enumerate(declarations):
+            if not isinstance(declaration, dict):
+                return _Declarations(
+                    reason=f"the `{event}` hook event holds a declaration that is not an object"
+                )
+            pointers.append(f"/{HOOKS_MEMBER}/{_pointer_token(event)}/{index}")
+    return _Declarations(tuple(pointers))
+
+
+def _pointer_token(name: str) -> str:
+    """One JSON Pointer reference token, per RFC 6901: ``~`` becomes ``~0`` and ``/`` becomes
+    ``~1``, in that order, so that a name carrying either stays one segment."""
+    return name.replace("~", "~0").replace("/", "~1")
 
 
 def _files(directory: Path, pattern: str) -> list[Path]:

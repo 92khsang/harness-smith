@@ -7,6 +7,7 @@ than only through a golden document.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -26,7 +27,17 @@ from harness_smith.artifacts import (
     Representation,
     Scope,
 )
+from harness_smith.vocabulary import SubjectKind
 from tests.support import write_tree
+
+PROJECT_SETTINGS = ".claude/settings.json"
+
+FORMAT = {"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "fmt.sh"}]}
+OTHER = {"matcher": "Bash", "hooks": [{"type": "command", "command": "audit.sh"}]}
+
+
+def settings(**members: object) -> str:
+    return json.dumps(members, indent=2) + "\n"
 
 
 def scan(tmp_path: Path, files: Mapping[str, str]) -> Discovery:
@@ -263,6 +274,189 @@ def test_machine_local_settings_are_excluded(tmp_path: Path) -> None:
     assert discovery.report.containers == ()
 
 
+def test_a_hook_in_project_settings_is_addressed_by_its_file_and_a_pointer(
+    tmp_path: Path,
+) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT]})})
+
+    hook = only(discovery, ArtifactType.HOOK)
+
+    assert hook.locator == f"{PROJECT_SETTINGS}#/hooks/PostToolUse/0"
+    assert hook.representation is Representation.CONTAINER_ENTRY
+    assert codes(discovery) == []
+
+
+def test_the_container_holds_the_hooks_it_declares(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT]})})
+
+    assert [container.locator for container in discovery.report.containers] == [PROJECT_SETTINGS]
+    assert discovery.report.containers[0].holds == (f"{PROJECT_SETTINGS}#/hooks/PostToolUse/0",)
+
+
+def test_the_settings_file_is_never_itself_a_hook(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT]})})
+
+    assert PROJECT_SETTINGS not in locators(discovery)
+
+
+def test_configuration_that_is_not_a_hook_declares_nothing(tmp_path: Path) -> None:
+    """The container holds hooks; the rest of a settings file is somebody else's business."""
+    discovery = scan(
+        tmp_path,
+        {PROJECT_SETTINGS: settings(permissions={"allow": ["Bash(ls:*)"]}, model="opus")},
+    )
+
+    assert discovery.report.artifacts == ()
+    assert discovery.report.containers[0].holds == ()
+    assert codes(discovery) == []
+
+
+def test_an_empty_hooks_block_declares_no_hooks(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={})})
+
+    assert discovery.report.artifacts == ()
+    assert discovery.report.containers[0].holds == ()
+    assert codes(discovery) == []
+
+
+def test_an_event_with_no_declarations_declares_no_hooks(tmp_path: Path) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"Stop": []})})
+
+    assert discovery.report.containers[0].holds == ()
+    assert codes(discovery) == []
+
+
+def test_two_identical_declarations_are_two_hooks_at_their_two_positions(
+    tmp_path: Path,
+) -> None:
+    """A Locator is a position, not an identity. Identical declarations are neither merged nor
+    given an invented identity that would tell them apart."""
+    discovery = scan(
+        tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT, dict(FORMAT)]})}
+    )
+
+    assert locators(discovery, ArtifactType.HOOK) == [
+        f"{PROJECT_SETTINGS}#/hooks/PostToolUse/0",
+        f"{PROJECT_SETTINGS}#/hooks/PostToolUse/1",
+    ]
+    assert codes(discovery) == []
+
+
+def test_a_declaration_is_addressed_by_position_rather_than_by_what_it_matches(
+    tmp_path: Path,
+) -> None:
+    """Inserting a declaration ahead of another moves the second one's Locator. Recognising it
+    afterwards is the lock's job, so discovery reports the position it sees now."""
+    before = scan(tmp_path / "before", {PROJECT_SETTINGS: settings(hooks={"Stop": [FORMAT]})})
+    after = scan(tmp_path / "after", {PROJECT_SETTINGS: settings(hooks={"Stop": [OTHER, FORMAT]})})
+
+    assert locators(before, ArtifactType.HOOK) == [f"{PROJECT_SETTINGS}#/hooks/Stop/0"]
+    assert locators(after, ArtifactType.HOOK) == [
+        f"{PROJECT_SETTINGS}#/hooks/Stop/0",
+        f"{PROJECT_SETTINGS}#/hooks/Stop/1",
+    ]
+
+
+def test_every_event_is_addressed_under_its_own_name(tmp_path: Path) -> None:
+    discovery = scan(
+        tmp_path,
+        {PROJECT_SETTINGS: settings(hooks={"Stop": [OTHER], "PostToolUse": [FORMAT, OTHER]})},
+    )
+
+    assert locators(discovery, ArtifactType.HOOK) == [
+        f"{PROJECT_SETTINGS}#/hooks/PostToolUse/0",
+        f"{PROJECT_SETTINGS}#/hooks/PostToolUse/1",
+        f"{PROJECT_SETTINGS}#/hooks/Stop/0",
+    ]
+
+
+def test_an_event_name_that_needs_escaping_is_escaped_as_a_json_pointer(tmp_path: Path) -> None:
+    """RFC 6901: `~` is written `~0` and `/` is written `~1`, so a pointer stays one segment."""
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"a/b~c": [FORMAT]})})
+
+    assert locators(discovery, ArtifactType.HOOK) == [f"{PROJECT_SETTINGS}#/hooks/a~1b~0c/0"]
+
+
+def test_a_hook_carries_the_same_unresolved_classification_as_any_other_artifact(
+    tmp_path: Path,
+) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"PostToolUse": [FORMAT]})})
+
+    hook = only(discovery, ArtifactType.HOOK)
+
+    assert hook.scope is Scope.REPOSITORY
+    assert hook.provenance is Provenance.AUTHORED
+    assert hook.management_authority is ManagementAuthority.UNKNOWN
+    assert hook.activation is Activation.UNKNOWN
+    assert hook.activation_cause is ActivationCause.RUNTIME_STATE_NOT_READ
+    assert hook.harness_relevant is True
+    assert hook.sets == (GovernanceSet.INVENTORIED,)
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("a truncated file", '{"hooks": {'),
+        ("a file that is not an object", "[]"),
+        ("a hooks block that is not an object", '{"hooks": "fmt.sh"}'),
+        ("an event that is not an array", '{"hooks": {"Stop": {"matcher": ""}}}'),
+        ("a declaration that is not an object", '{"hooks": {"Stop": ["fmt.sh"]}}'),
+    ],
+)
+def test_a_container_whose_declarations_cannot_be_addressed_resolves_no_hook(
+    tmp_path: Path, name: str, content: str
+) -> None:
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: content})
+
+    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"], name
+    assert discovery.diagnostics[0].subject.kind is SubjectKind.CONTAINER
+    assert discovery.diagnostics[0].subject.locator == PROJECT_SETTINGS
+    assert locators(discovery, ArtifactType.HOOK) == []
+
+
+def test_a_broken_container_is_still_reported_as_a_container_holding_nothing(
+    tmp_path: Path,
+) -> None:
+    """The file is there and is still where hook declarations belong, so leaving it out of the
+    Container Inventory would hide it."""
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: '{"hooks": {'})
+
+    assert discovery.report.containers[0].locator == PROJECT_SETTINGS
+    assert discovery.report.containers[0].holds == ()
+
+
+def test_a_readable_event_in_a_broken_container_resolves_no_hook_either(tmp_path: Path) -> None:
+    """One finding per container: a container that cannot be read whole is not read in part."""
+    discovery = scan(
+        tmp_path,
+        {PROJECT_SETTINGS: '{"hooks": {"PostToolUse": [{"matcher": ""}], "Stop": "fmt.sh"}}'},
+    )
+
+    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
+    assert locators(discovery, ArtifactType.HOOK) == []
+
+
+def test_settings_whose_bytes_are_not_text_is_an_unparseable_container(tmp_path: Path) -> None:
+    repository = write_tree(tmp_path / "repository", {"CLAUDE.md": "# entry\n"})
+    (repository / ".claude").mkdir(exist_ok=True)
+    (repository / PROJECT_SETTINGS).write_bytes(b'{"model": "\xff\xfe"}')
+
+    discovery = claude_code.discover(repository)
+
+    assert codes(discovery) == ["HS-HOOK-CONTAINER-UNPARSEABLE"]
+    assert "UTF-8" in discovery.diagnostics[0].message
+
+
+def test_hooks_in_machine_local_settings_are_excluded(tmp_path: Path) -> None:
+    discovery = scan(
+        tmp_path, {".claude/settings.local.json": settings(hooks={"PostToolUse": [FORMAT]})}
+    )
+
+    assert discovery.report.artifacts == ()
+    assert discovery.report.containers == ()
+    assert discovery.diagnostics == ()
+
+
 def test_discovery_reports_repository_scope_and_leaves_authority_unresolved(
     tmp_path: Path,
 ) -> None:
@@ -311,3 +505,23 @@ def test_a_runtime_location_that_is_a_file_rather_than_a_directory_is_ignored(
 
     assert discovery.report.artifacts == ()
     assert discovery.diagnostics == ()
+
+
+def test_what_a_container_holds_is_ordered_the_way_the_artifact_list_is(tmp_path: Path) -> None:
+    """Both are lists of Locators in one document, so a reader comparing them is never made to
+    reconcile two orders. Eleven declarations are what makes the two rules disagree."""
+    declared = [{"matcher": f"m{index}", "hooks": []} for index in range(11)]
+    discovery = scan(tmp_path, {PROJECT_SETTINGS: settings(hooks={"Stop": declared})})
+
+    document = discovery.report.as_document()
+    artifacts = document["artifacts"]
+    containers = document["containers"]
+    assert isinstance(artifacts, list)
+    assert isinstance(containers, list)
+
+    assert containers[0]["holds"] == [entry["locator"] for entry in artifacts]
+    assert containers[0]["holds"][:3] == [
+        f"{PROJECT_SETTINGS}#/hooks/Stop/0",
+        f"{PROJECT_SETTINGS}#/hooks/Stop/1",
+        f"{PROJECT_SETTINGS}#/hooks/Stop/10",
+    ]
