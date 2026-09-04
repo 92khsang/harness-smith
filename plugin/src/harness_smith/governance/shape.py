@@ -8,6 +8,10 @@ rather than carried into a decision as though somebody had written what it is re
 Each kind of entry declares its fields once, as a table, and one reader applies them. A check
 written per field at each call site is a check that gets forgotten at the next one, and the
 fields a governance file admits are exactly the ones its schema documents.
+
+A key that is not text is refused before anything else is asked of an entry. YAML admits a
+number or a null as the key of a nested mapping, and a reader that sorted such keys to name
+the unknown one would fall over on the comparison instead of answering.
 """
 
 from __future__ import annotations
@@ -16,12 +20,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from harness_smith.governance.paths import flaw
+
 __all__ = ["Field", "Kind", "Shape", "listed", "mapping"]
 
 
 class Kind(StrEnum):
+    """What a field holds.
+
+    ``PATH`` is text that names a file relative to some root — a plugin's, or this
+    repository's — and is refused when it could name one anywhere else. It is validated here
+    and kept as written; the reader that compares it against a tree normalises it then.
+    """
+
     TEXT = "text"
     INTEGER = "integer"
+    PATH = "path"
     ENTRY = "entry"
 
 
@@ -45,10 +59,20 @@ class Field:
             return None
         if not isinstance(value, str):
             return f"{where}'s `{self.name}` is not text"
+        if self.kind is Kind.PATH:
+            return self._path(value, where)
         if self.values and value not in self.values:
             allowed = ", ".join(self.values)
             return f"{where}'s `{self.name}` is `{value}`, which is not one of {allowed}"
         return None
+
+    def _path(self, value: str, where: str) -> str | None:
+        clause = flaw(value)
+        if clause is None:
+            return None
+        if value and "\x00" not in value:
+            return f"{where}'s `{self.name}` is `{value}`, which {clause}"
+        return f"{where}'s `{self.name}` {clause}"
 
 
 @dataclass(frozen=True)
@@ -63,7 +87,13 @@ class Shape:
         if reason:
             return reason
         assert isinstance(value, dict)
-        return self._closed(value, where) or self._members(value, where)
+        return (
+            self._named(value, where) or self._closed(value, where) or self._members(value, where)
+        )
+
+    def _named(self, entry: Mapping[object, object], where: str) -> str | None:
+        unnamed = [key for key in entry if not isinstance(key, str)]
+        return f"{where} has a key that is not text: {unnamed[0]!r}" if unnamed else None
 
     def _closed(self, entry: Mapping[str, object], where: str) -> str | None:
         unknown = sorted(set(entry) - {field.name for field in self.fields})

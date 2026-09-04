@@ -413,14 +413,6 @@ BROKEN_LOCKS = [
         {"artifacts": {"a.md": {**ADOPTED, "source": "s"}}},
     ),
     (
-        "an adopted seed carrying an import URL",
-        {
-            "artifacts": {
-                "a.md": {**ADOPTED, "adoptedFrom": {**SEED, "sourceUrl": "https://example.test"}}
-            }
-        },
-    ),
-    (
         "an adopted seed missing its digest",
         {"artifacts": {"a.md": {**ADOPTED, "adoptedFrom": {"source": "s", "sourceVersion": "1"}}}},
     ),
@@ -430,6 +422,15 @@ BROKEN_LOCKS = [
     (
         "an artifact whose `#` is not followed by a pointer",
         {"artifacts": {"a.json#hooks": GENERATED}},
+    ),
+    ("an artifact whose `#` is followed by nothing", {"artifacts": {"a.json#": GENERATED}}),
+    (
+        "an artifact whose pointer escapes with `~2`",
+        {"artifacts": {"a.json#/hooks/~2": GENERATED}},
+    ),
+    (
+        "an artifact whose pointer ends in a bare `~`",
+        {"artifacts": {"a.json#/hooks/~": GENERATED}},
     ),
 ]
 
@@ -609,3 +610,186 @@ def test_a_path_that_is_not_a_readable_file_is_not_a_repository_that_declared_no
     assert codes(governance) == ["HS-MANIFEST-INVALID"]
     assert governance.manifest.present is True
     assert governance.manifest.valid is False
+
+
+def consumer_with(**fields: str) -> str:
+    """A consumers entry whose one item carries ``fields`` verbatim, each on its own line."""
+    lines = [f"      {name}: {value}" for name, value in fields.items()]
+    return (
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      consumer: c\n      binding: non-literal\n" + "\n".join(lines) + "\n"
+    )
+
+
+NESTED_KEY_THAT_IS_NOT_TEXT = [
+    (
+        "an authority entry",
+        "schemaVersion: 1\nauthority:\n  a.md: { authority: local, 1: x, z: y }\n",
+    ),
+    (
+        "an owner",
+        "schemaVersion: 1\nauthority:\n  a.md:\n    managed-by:\n"
+        "      plugin: p\n      1: x\n      z: y\n",
+    ),
+    (
+        "a seed",
+        "schemaVersion: 1\nauthority:\n  a.md:\n    authority: local\n"
+        "    adopted-from: { plugin: p, version: v, source-revision: r, seed: s, 1: x, z: y }\n",
+    ),
+    (
+        "a consumer",
+        consumer_with(
+            evidence="{ path: p.md, locator: { type: contains-text, value: x } }",
+            **{"1": "x", "z": "y"},
+        ),
+    ),
+    (
+        "a writer",
+        "schemaVersion: 1\nwriters:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      writer: w\n      mode: regenerate\n      confirmed-by: human\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n"
+        "      1: x\n      z: y\n",
+    ),
+    (
+        "evidence",
+        consumer_with(
+            evidence="{ path: p.md, locator: { type: contains-text, value: x }, 1: x, z: y }"
+        ),
+    ),
+    (
+        "a locator",
+        consumer_with(
+            evidence="{ path: p.md, locator: { type: contains-text, value: x, 1: x, z: y } }"
+        ),
+    ),
+    (
+        "a resolution",
+        consumer_with(
+            evidence="{ path: p.md, locator: { type: contains-text, value: x } }",
+            resolution="{ kind: k, confirmed-by: human, 1: x, z: y }",
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("where", "content"),
+    NESTED_KEY_THAT_IS_NOT_TEXT,
+    ids=[case[0] for case in NESTED_KEY_THAT_IS_NOT_TEXT],
+)
+def test_a_nested_key_that_is_not_text_is_refused_rather_than_tripped_over(
+    tmp_path: Path, where: str, content: str
+) -> None:
+    """YAML admits a number as the key of a nested mapping. Sorting such keys next to text
+    ones to name the unknown key raised instead of answering, so a malformed manifest ended as
+    an internal error and exit 3 rather than the usage error it is."""
+    governance = read(tmp_path, {MANIFEST: content})
+
+    assert codes(governance) == ["HS-MANIFEST-INVALID"], where
+    assert "not text" in governance.diagnostics[0].message
+
+
+UNSAFE_PATHS = ["/etc/passwd", "../../outside", "docs/../../outside", "C:/x", "//server/share/x"]
+UNNAMED_PATHS = ["", "a\\0b"]
+
+
+@pytest.mark.parametrize("path", [*UNSAFE_PATHS, *UNNAMED_PATHS])
+def test_evidence_naming_a_file_outside_the_plugin_is_refused(tmp_path: Path, path: str) -> None:
+    """`evidence.path` is relative to the plugin root at the recorded revision; a path that
+    could name a file anywhere else is refused rather than carried into a relation check."""
+    content = consumer_with(
+        evidence=f'{{ path: "{path}", locator: {{ type: contains-text, value: x }} }}'
+    )
+
+    governance = read(tmp_path, {MANIFEST: content})
+
+    assert codes(governance) == ["HS-MANIFEST-INVALID"], path
+    assert "`path`" in governance.diagnostics[0].message
+
+
+@pytest.mark.parametrize("path", [*UNSAFE_PATHS, *UNNAMED_PATHS])
+def test_a_seed_naming_a_file_outside_the_plugin_is_refused(tmp_path: Path, path: str) -> None:
+    content = (
+        "schemaVersion: 1\nauthority:\n  a.md:\n    authority: local\n"
+        f'    adopted-from: {{ plugin: p, version: v, source-revision: r, seed: "{path}" }}\n'
+    )
+
+    governance = read(tmp_path, {MANIFEST: content})
+
+    assert codes(governance) == ["HS-MANIFEST-INVALID"], path
+    assert "`seed`" in governance.diagnostics[0].message
+
+
+@pytest.mark.parametrize("path", [*UNSAFE_PATHS, "", "a\x00b"])
+def test_an_entry_point_outside_the_repository_is_refused(tmp_path: Path, path: str) -> None:
+    entrypoint = {"runtime": "r", "path": path, "template": "t", "version": "1"}
+
+    governance = read(tmp_path, {LOCK: lock_with({"entrypoint": entrypoint})})
+
+    assert codes(governance) == ["HS-LOCK-INVALID"], path
+    assert "`path`" in governance.diagnostics[0].message
+
+
+def test_a_path_field_is_kept_as_written_and_normalised_where_it_is_compared(
+    tmp_path: Path,
+) -> None:
+    """The manifest exposes what a person wrote; whoever resolves the path against a tree
+    spells it the one way paths are compared by."""
+    content = consumer_with(
+        evidence='{ path: "./skills//x/SKILL.md", locator: { type: contains-text, value: x } }'
+    )
+
+    governance = read(tmp_path, {MANIFEST: content})
+
+    assert governance.manifest.valid
+    item = governance.manifest.consumers["a.md"][0]
+    assert isinstance(item, dict)
+    evidence = item["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["path"] == "./skills//x/SKILL.md"
+    assert normalised(evidence["path"]) == "skills/x/SKILL.md"
+
+
+def test_an_artifact_adopted_from_an_import_keeps_the_url_and_licence_it_came_under(
+    tmp_path: Path,
+) -> None:
+    """Adopting a file records that its content diverged from the import; it does not lose
+    where the import came from or what it was licensed under."""
+    imported = {
+        "provenance": "imported",
+        "baselineSha256": "b" * 64,
+        "source": "example:doc",
+        "sourceVersion": "2.0.0",
+        "sha256": "a" * 64,
+        "sourceUrl": "https://example.test/doc.md",
+        "license": "CC-BY-4.0",
+    }
+    adopted = {
+        "provenance": "adopted",
+        "baselineSha256": "c" * 64,
+        "adoptedFrom": {
+            name: value
+            for name, value in imported.items()
+            if name not in ("provenance", "baselineSha256")
+        },
+    }
+
+    before = read(tmp_path / "before", {LOCK: lock_with({"artifacts": {"docs/x.md": imported}})})
+    after = read(tmp_path / "after", {LOCK: lock_with({"artifacts": {"docs/x.md": adopted}})})
+
+    assert before.lock.valid and after.lock.valid
+    seed = after.lock.artifacts["docs/x.md"]["adoptedFrom"]
+    assert isinstance(seed, dict)
+    assert seed["sourceUrl"] == "https://example.test/doc.md"
+    assert seed["license"] == "CC-BY-4.0"
+    assert seed["sha256"] == before.lock.artifacts["docs/x.md"]["sha256"]
+
+
+def test_a_pointer_escaped_as_the_rfc_allows_is_a_locator(tmp_path: Path) -> None:
+    """RFC 6901 escapes `~` as `~0` and `/` as `~1`, and nothing else."""
+    locator = ".claude/settings.json#/hooks/a~0b/c~1d/0"
+
+    governance = read(tmp_path, {LOCK: lock_with({"artifacts": {locator: GENERATED}})})
+
+    assert governance.lock.valid
+    assert locator in governance.lock.artifacts

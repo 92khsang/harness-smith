@@ -131,6 +131,32 @@ def test_the_launcher_refuses_a_repository_whose_governance_file_will_not_read(
 
 
 @needs_real_uv
+def test_the_launcher_refuses_a_manifest_whose_nested_key_is_not_text(
+    plugin: RealPlugin, tmp_path: Path
+) -> None:
+    """A malformed manifest is a usage error, never an internal one: exit 2 rather than 3, and
+    a document rather than a traceback."""
+    manifest = (
+        "schemaVersion: 1\nauthority:\n  a.md:\n    managed-by:\n"
+        "      plugin: p\n      1: x\n      z: y\n"
+    )
+    repository = write_tree(
+        make_repository(tmp_path / "repository"),
+        {"CLAUDE.md": "# entry\n", "harness.manifest.yaml": manifest},
+    )
+
+    run = plugin.run("surface-audit", "--format", "json", "--root", str(repository))
+
+    assert run.returncode == 2, run.stderr
+    assert "Traceback" not in run.stderr
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert document["status"] == "usage-error"
+    assert document["data"] is None
+    assert [finding["code"] for finding in document["diagnostics"]] == ["HS-MANIFEST-INVALID"]
+
+
+@needs_real_uv
 def test_the_launcher_refuses_a_repository_whose_lock_will_not_read(
     plugin: RealPlugin, tmp_path: Path
 ) -> None:

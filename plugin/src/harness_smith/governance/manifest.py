@@ -46,12 +46,15 @@ LOCATOR_TYPES = ("contains-literal-path", "absent-literal-path", "contains-text"
 
 MANAGED_BY = Shape((Field("plugin", required=True), Field("operation")))
 
+# `seed` names the file in the plugin the adopted content was taken from, relative to that
+# plugin's root at the recorded revision. It is refused where it could name a file anywhere
+# else, and kept as written; #8 and #13 normalise it when they resolve it against the plugin.
 ADOPTED_FROM = Shape(
     (
         Field("plugin", required=True),
         Field("version", required=True),
         Field("source-revision", required=True),
-        Field("seed", required=True),
+        Field("seed", Kind.PATH, required=True),
     )
 )
 
@@ -66,10 +69,14 @@ AUTHORITY = Shape(
 )
 
 # `path` is relative to the plugin root at the recorded revision rather than to this
-# repository, so it is text here and not one of the paths `paths` governs.
+# repository. It is refused where it could name a file outside that root, and kept as written;
+# #13 normalises it when it resolves the evidence against the installed plugin.
 LOCATOR = Shape((Field("type", required=True, values=LOCATOR_TYPES), Field("value", required=True)))
 EVIDENCE = Shape(
-    (Field("path", required=True), Field("locator", Kind.ENTRY, required=True, shape=LOCATOR))
+    (
+        Field("path", Kind.PATH, required=True),
+        Field("locator", Kind.ENTRY, required=True, shape=LOCATOR),
+    )
 )
 
 RESOLUTION = Shape(

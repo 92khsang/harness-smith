@@ -5,18 +5,20 @@ approved for it. It is JSON, tool-authored, and regenerated rather than merged o
 which is only safe because nothing in it is a human choice: those live in the manifest.
 
 `baselineSha256` is the approved drift baseline, the digest at the moment the content was last
-generated, imported or adopted. It is not a current measurement. The digest of what is on disk
-now is computed at scan time and never written here, so a lock diff shows change somebody
-approved rather than change that merely happened. Computing it, and comparing it against this
-baseline, is #36's.
+generated, imported or adopted. It is not a current measurement, and no current measurement is
+ever stored here, so a lock diff shows change somebody approved rather than change that merely
+happened. Computing the digest of what is on disk now, and comparing it against this baseline,
+is #36's.
 
 The lock carries no timestamps, machine paths, user identity or session identifiers, for the
 same reason: a diff that moves without the content moving is a diff nobody can read.
 
 What an entry may hold depends on its provenance, so each provenance has its own closed shape
-rather than one shape loose enough for all three. `sourceUrl` and `license` describe an import
-and are refused everywhere else, and an `adopted` entry keeps its origin under `adoptedFrom`
-rather than beside its own baseline, where the two would be indistinguishable.
+rather than one shape loose enough for all three. `sourceUrl` and `license` describe an import,
+so a `generated` entry refuses them; an `adopted` entry keeps its origin under `adoptedFrom`
+rather than beside its own baseline, where the two would be indistinguishable, and that origin
+may have been an import, so the seed admits them too — adopting a file must not lose the URL
+and licence it was taken under.
 """
 
 from __future__ import annotations
@@ -44,10 +46,12 @@ TOP_LEVEL = (SCHEMA_VERSION, "standard", "entrypoint", ARTIFACTS)
 
 STANDARD = Shape((Field("id", required=True), Field("version", required=True)))
 
+# `path` names the entry point inside this repository. It is refused where it could name a
+# file anywhere else, and kept as written; #18 normalises it when it compares the entry point.
 ENTRYPOINT = Shape(
     (
         Field("runtime", required=True),
-        Field("path", required=True),
+        Field("path", Kind.PATH, required=True),
         Field("template", required=True),
         Field("version", required=True),
     )
@@ -75,7 +79,7 @@ COMMON: tuple[Field, ...] = (
     Field("declarationDigest"),
 )
 
-SEED = Shape(DESCRIPTOR)
+SEED = Shape(IMPORT_DESCRIPTOR)
 
 ENTRY_SHAPES: Mapping[str, Shape] = {
     "generated": Shape((*COMMON, *DESCRIPTOR)),

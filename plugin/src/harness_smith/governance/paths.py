@@ -1,10 +1,11 @@
-"""The repository-relative paths a governance file keys its entries by.
+"""The relative paths a governance file carries: the keys its entries sit under, and the
+fields inside them that name a file.
 
-A key is checked before it is used, and refused when it is not a path this tool may act on,
-rather than coerced into one. A key decides who may write a file, so a key naming somewhere
-outside the repository — an absolute path, a drive, a network share, a step through `..` —
-would decide that for a file nobody declared. Reading past one is worse than refusing the
-file it appears in.
+A path is checked before it is used, and refused when it is not one this tool may act on,
+rather than coerced into one. A key decides who may write a file, and a path field says where
+a relation's evidence or an adopted seed lives, so either naming somewhere outside its root —
+an absolute path, a drive, a network share, a step through `..` — would carry a decision to a
+file nobody declared. Reading past one is worse than refusing the file it appears in.
 
 A path is normalised lexically and never resolved against the filesystem: resolving would
 follow symlinks and answer differently on different machines, and these files are compared,
@@ -13,19 +14,25 @@ the same reason rather than collapsed — with a symlink in the way the collapse
 the resolved one name two different files, and neither is an answer this tool can stand
 behind. A `.` is dropped, because it names the same directory either way.
 
-Two spellings of one path are one key. That is what makes "a path appearing twice in one
-mapping" a rule with something to catch: `docs/x.md` and `./docs/x.md` name one file.
+Keys are normalised here, because two spellings of one path are one key, and that is what
+makes "a path appearing twice in one mapping" a rule with something to catch. A path field is
+validated here and kept as written: the reader that compares it against a tree — a plugin's,
+for evidence, or this repository's, for a seed or an entry point — normalises it with the same
+``normalised`` at the point of comparison, so the manifest exposes what a person wrote and one
+spelling is what gets compared.
 """
 
 from __future__ import annotations
 
-__all__ = ["normalised", "refused"]
+__all__ = ["flaw", "normalised", "refused"]
 
 CURRENT = "."
 PARENT = ".."
 SEPARATOR = "/"
 POINTER = "#"
 NUL = "\x00"
+ESCAPE = "~"
+ESCAPED = ("0", "1")
 
 
 def refused(key: object, where: str, *, locator: bool = False) -> str | None:
@@ -40,13 +47,39 @@ def refused(key: object, where: str, *, locator: bool = False) -> str | None:
     if pointer is not None:
         if not locator:
             return f"{where} is keyed by `{key}`, and a path here holds no pointer"
-        if not pointer.startswith(SEPARATOR):
-            return f"{where} is keyed by `{key}`, whose `#` is not followed by a JSON Pointer"
-    return _path_refused(path, key, where)
+        clause = _pointer_flaw(pointer)
+        if clause:
+            return f"{where} is keyed by `{key}`, {clause}"
+    clause = flaw(path)
+    if clause is None:
+        return None
+    if _shown(path):
+        return f"{where} is keyed by `{key}`, which {clause}"
+    return f"{where} is keyed by a path that {clause}"
+
+
+def flaw(path: str) -> str | None:
+    """What keeps ``path`` from being a relative path inside its root, as a clause that
+    follows the path's name, or ``None``."""
+    if NUL in path:
+        return "holds a NUL"
+    forward = path.replace("\\", SEPARATOR)
+    if forward.startswith(SEPARATOR * 2):
+        return "names a network share"
+    if forward.startswith(SEPARATOR):
+        return "is absolute"
+    if _drive(forward):
+        return "names a drive"
+    segments = _segments(path)
+    if not segments:
+        return "names nothing"
+    if PARENT in segments:
+        return "steps outside its root"
+    return None
 
 
 def normalised(key: str) -> str:
-    """``key`` as the one spelling entries are compared by.
+    """``key`` as the one spelling paths are compared by.
 
     Separators become forward slashes, `.` segments and empty ones drop out, and a Locator's
     pointer is kept as it was written: it addresses a position inside a document rather than a
@@ -67,22 +100,22 @@ def _segments(path: str) -> list[str]:
     return [segment for segment in forward.split(SEPARATOR) if segment not in ("", CURRENT)]
 
 
-def _path_refused(path: str, key: str, where: str) -> str | None:
-    if NUL in path:
-        return f"{where} is keyed by a path holding a NUL"
-    forward = path.replace("\\", SEPARATOR)
-    if forward.startswith(SEPARATOR * 2):
-        return f"{where} is keyed by `{key}`, which names a network share"
-    if forward.startswith(SEPARATOR):
-        return f"{where} is keyed by `{key}`, which is absolute"
-    if _drive(forward):
-        return f"{where} is keyed by `{key}`, which names a drive"
-    segments = _segments(path)
-    if not segments:
-        return f"{where} is keyed by a path naming nothing"
-    if PARENT in segments:
-        return f"{where} is keyed by `{key}`, which steps outside the repository"
+def _pointer_flaw(pointer: str) -> str | None:
+    """RFC 6901: a pointer that reaches into a document starts with `/`, and `~` appears only
+    as `~0` or `~1`. A `~` escaping nothing is not a pointer #36 can resolve, and refusing it
+    here keeps a malformed key from being read later as a declaration that drifted or moved."""
+    if not pointer.startswith(SEPARATOR):
+        return "whose `#` is not followed by a JSON Pointer"
+    for index, character in enumerate(pointer):
+        if character == ESCAPE and pointer[index + 1 : index + 2] not in ESCAPED:
+            return "whose pointer holds a `~` that is not `~0` or `~1`"
     return None
+
+
+def _shown(path: str) -> bool:
+    """Whether a message may echo the path: an empty one says nothing, and one holding a NUL
+    would put a NUL in a document."""
+    return bool(path) and NUL not in path
 
 
 def _drive(forward: str) -> bool:
