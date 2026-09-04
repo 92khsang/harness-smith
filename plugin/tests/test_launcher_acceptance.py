@@ -176,6 +176,35 @@ def test_the_launcher_refuses_a_repository_whose_lock_will_not_read(
 
 
 @needs_real_uv
+def test_the_launcher_refuses_a_lock_whose_provenance_is_declared_twice(
+    plugin: RealPlugin, tmp_path: Path
+) -> None:
+    """A repeated property is a file that says two things, refused at the boundary rather
+    than read as whichever survived parsing."""
+    lock = (
+        '{"schemaVersion": 1, "standard": {"id": "s", "version": "1"},'
+        ' "entrypoint": {"runtime": "r", "path": "CLAUDE.md", "template": "t", "version": "1"},'
+        ' "artifacts": {"a.md": {"provenance": "generated", "provenance": "imported",'
+        ' "baselineSha256": "x", "source": "s", "sourceVersion": "1", "sha256": "y"}}}'
+    )
+    repository = write_tree(
+        make_repository(tmp_path / "repository"),
+        {"CLAUDE.md": "# entry\n", "harness.lock.json": lock},
+    )
+
+    run = plugin.run("surface-audit", "--format", "json", "--root", str(repository))
+
+    assert run.returncode == 2, run.stderr
+    assert "Traceback" not in run.stderr
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert document["status"] == "usage-error"
+    assert document["data"] is None
+    assert [finding["code"] for finding in document["diagnostics"]] == ["HS-LOCK-INVALID"]
+    assert "provenance" in document["diagnostics"][0]["message"]
+
+
+@needs_real_uv
 def test_a_source_only_update_runs_the_new_code_rather_than_a_cached_wheel(
     plugin: RealPlugin,
 ) -> None:

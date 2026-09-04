@@ -13,6 +13,13 @@ is #36's.
 The lock carries no timestamps, machine paths, user identity or session identifiers, for the
 same reason: a diff that moves without the content moving is a diff nobody can read.
 
+A property declared twice anywhere in the file is refused. RFC 8259 leaves a repeated name to
+the parser, which keeps the last, so a `provenance` written as `generated` and then `imported`
+would read as `imported` and nothing downstream could tell that it had. Every field here
+decides something about an artifact, so the rule is not limited to the names discovery keys
+on: a repeat anywhere is a file that says two things, and the object it sits in is named so
+the repair is one edit rather than a search.
+
 What an entry may hold depends on its provenance, so each provenance has its own closed shape
 rather than one shape loose enough for all three. `sourceUrl` and `license` describe an import,
 so a `generated` entry refuses them; an `adopted` entry keeps its origin under `adoptedFrom`
@@ -28,7 +35,7 @@ from dataclasses import dataclass, field
 
 from harness_smith.governance.paths import normalised, refused
 from harness_smith.governance.shape import Field, Kind, Shape
-from harness_smith.json_document import JsonDocumentState, own_repeated_names, parse_json_document
+from harness_smith.json_document import JsonDocumentState, JsonObject, parse_json_document
 from harness_smith.text_file import TextFile, TextFileState
 
 __all__ = ["LOCK", "Lock", "read_lock"]
@@ -43,6 +50,9 @@ SUPPORTED_VERSION = 1
 
 ARTIFACTS = "artifacts"
 TOP_LEVEL = (SCHEMA_VERSION, "standard", "entrypoint", ARTIFACTS)
+
+WHERE = "the lock"
+ARTIFACTS_WHERE = f"{WHERE}'s `{ARTIFACTS}`"
 
 STANDARD = Shape((Field("id", required=True), Field("version", required=True)))
 
@@ -120,9 +130,8 @@ def read_lock(file: TextFile) -> Lock:
     if document.state is not JsonDocumentState.PARSED:
         return Lock(present=True, reason=document.reason)
     members = document.members
-    repeated = own_repeated_names(members)
     reason = (
-        (f"the lock declares `{repeated[0]}` more than once" if repeated else None)
+        _repeated(members, WHERE)
         or _closed(members)
         or _missing(members)
         or _version(members)
@@ -169,13 +178,37 @@ def _version(members: Mapping[str, object]) -> str | None:
     return None
 
 
+def _repeated(value: object, where: str) -> str | None:
+    """The first property declared twice anywhere under ``value``, named by the object it
+    repeats in. Read before anything else, so a file that says two things is refused for
+    that and not for whichever of the two happened to survive parsing."""
+    if isinstance(value, JsonObject):
+        if value.repeated_names:
+            return f"{where} declares `{value.repeated_names[0]}` more than once"
+        for name, member in value.items():
+            reason = _repeated(member, _within(where, name))
+            if reason:
+                return reason
+    elif isinstance(value, list):
+        for index, member in enumerate(value):
+            reason = _repeated(member, f"{where}[{index}]")
+            if reason:
+                return reason
+    return None
+
+
+def _within(where: str, name: str) -> str:
+    """How the object under ``name`` is referred to, matching the shape checks: an artifact's
+    entry is "the lock entry for `path`", anything else is possessive."""
+    if where == ARTIFACTS_WHERE:
+        return f"{WHERE} entry for `{name}`"
+    return f"{where}'s `{name}`"
+
+
 def _artifacts(value: object) -> Mapping[str, Mapping[str, object]] | str:
-    where = f"the lock's `{ARTIFACTS}`"
+    where = ARTIFACTS_WHERE
     if not isinstance(value, dict):
         return f"{where} is not a mapping"
-    repeated = own_repeated_names(value)
-    if repeated:
-        return f"the lock names `{repeated[0]}` twice"
     entries: dict[str, Mapping[str, object]] = {}
     for path, entry in value.items():
         reason = refused(path, where, locator=True)
@@ -184,7 +217,7 @@ def _artifacts(value: object) -> Mapping[str, Mapping[str, object]] | str:
         assert isinstance(path, str)
         key = normalised(path)
         if key in entries:
-            return f"the lock names `{key}` twice"
+            return f"{WHERE} names `{key}` twice"
         read = _entry(key, entry)
         if isinstance(read, str):
             return read
@@ -200,7 +233,7 @@ def _entry(path: str, entry: object) -> Mapping[str, object] | str:
     carries it under `adoptedFrom`, describing the state its local content diverged from while
     its own baseline records the approved local content.
     """
-    where = f"the lock entry for `{path}`"
+    where = f"{WHERE} entry for `{path}`"
     if not isinstance(entry, dict):
         return f"{where} is not a mapping"
     if PROVENANCE not in entry:

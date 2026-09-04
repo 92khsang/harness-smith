@@ -793,3 +793,101 @@ def test_a_pointer_escaped_as_the_rfc_allows_is_a_locator(tmp_path: Path) -> Non
 
     assert governance.lock.valid
     assert locator in governance.lock.artifacts
+
+
+def raw_lock(
+    standard: str = '{"id": "s", "version": "1"}',
+    entrypoint: str = '{"runtime": "r", "path": "CLAUDE.md", "template": "t", "version": "1"}',
+    artifacts: str = "{}",
+    version: str = '"schemaVersion": 1',
+) -> str:
+    """A lock written as text, which is the only way to write a property twice."""
+    return (
+        f'{{{version}, "standard": {standard}, "entrypoint": {entrypoint},'
+        f' "artifacts": {artifacts}}}'
+    )
+
+
+GENERATED_TEXT = (
+    '{"provenance": "generated", "baselineSha256": "x",'
+    ' "source": "s", "sourceVersion": "1", "sha256": "y"}'
+)
+
+REPEATED_PROPERTIES = [
+    (
+        "the top level",
+        raw_lock(version='"schemaVersion": 1, "schemaVersion": 1'),
+        "the lock declares `schemaVersion` more than once",
+    ),
+    (
+        "the standard",
+        raw_lock(standard='{"id": "s", "id": "t", "version": "1"}'),
+        "the lock's `standard` declares `id` more than once",
+    ),
+    (
+        "the entry point",
+        raw_lock(
+            entrypoint='{"runtime": "r", "path": "a.md", "path": "b.md",'
+            ' "template": "t", "version": "1"}'
+        ),
+        "the lock's `entrypoint` declares `path` more than once",
+    ),
+    (
+        "the artifacts mapping",
+        raw_lock(artifacts=f'{{"a.md": {GENERATED_TEXT}, "a.md": {GENERATED_TEXT}}}'),
+        "the lock's `artifacts` declares `a.md` more than once",
+    ),
+    (
+        "a generated entry, whose provenance would otherwise read as imported",
+        raw_lock(
+            artifacts='{"a.md": {"provenance": "generated", "provenance": "imported",'
+            ' "baselineSha256": "x", "source": "s", "sourceVersion": "1", "sha256": "y"}}'
+        ),
+        "the lock entry for `a.md` declares `provenance` more than once",
+    ),
+    (
+        "an adopted entry",
+        raw_lock(
+            artifacts='{"a.md": {"provenance": "adopted", "baselineSha256": "x",'
+            ' "baselineSha256": "z", "adoptedFrom": {"source": "s", "sourceVersion": "1",'
+            ' "sha256": "y"}}}'
+        ),
+        "the lock entry for `a.md` declares `baselineSha256` more than once",
+    ),
+    (
+        "an adopted seed",
+        raw_lock(
+            artifacts='{"a.md": {"provenance": "adopted", "baselineSha256": "x",'
+            ' "adoptedFrom": {"source": "s", "source": "t", "sourceVersion": "1",'
+            ' "sha256": "y"}}}'
+        ),
+        "the lock entry for `a.md`'s `adoptedFrom` declares `source` more than once",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("where", "content", "message"),
+    REPEATED_PROPERTIES,
+    ids=[case[0] for case in REPEATED_PROPERTIES],
+)
+def test_a_property_declared_twice_anywhere_in_the_lock_is_refused_where_it_repeats(
+    tmp_path: Path, where: str, content: str, message: str
+) -> None:
+    """JSON leaves a repeated name to the parser, which keeps the last, so a `provenance`
+    written as generated and then imported read as imported and nothing downstream could tell.
+    Every field of the lock decides something, so the repeat is refused wherever it sits, and
+    the object it sits in is named."""
+    governance = read(tmp_path, {LOCK: content})
+
+    assert codes(governance) == ["HS-LOCK-INVALID"], where
+    assert governance.diagnostics[0].message == message
+    assert governance.lock.artifacts == {}
+
+
+def test_a_lock_written_once_is_read_once(tmp_path: Path) -> None:
+    """The negative of the table above: the same document with nothing repeated reads."""
+    governance = read(tmp_path, {LOCK: raw_lock(artifacts=f'{{"a.md": {GENERATED_TEXT}}}')})
+
+    assert governance.lock.valid
+    assert governance.lock.artifacts["a.md"]["provenance"] == "generated"
