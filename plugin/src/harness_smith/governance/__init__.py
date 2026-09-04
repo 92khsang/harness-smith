@@ -30,14 +30,17 @@ class Governance:
     diagnostics: tuple[Diagnostic, ...] = ()
 
     @property
-    def unread(self) -> bool:
-        """A governance file is there and did not read.
+    def invalid(self) -> bool:
+        """A governance file is there and is not one: it would not read, it would not parse,
+        or it does not satisfy the schema.
 
-        Absent is not one: a repository that declared nothing has declared nothing. This is
-        the state a caller stops on, rather than the presence of any diagnostic, which a
-        later finding of another severity would also satisfy.
+        Absent is not this state — a repository that declared nothing has declared nothing —
+        and neither is the presence of a diagnostic, which a later finding of another severity
+        would also satisfy. This is the configuration error a run stops on.
         """
-        return bool(self.manifest.reason or self.lock.reason)
+        return (self.manifest.present and not self.manifest.valid) or (
+            self.lock.present and not self.lock.valid
+        )
 
 
 def read_governance(root: Path) -> Governance:

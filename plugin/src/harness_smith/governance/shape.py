@@ -1,27 +1,84 @@
-"""Checking the shape of a governance file's entries.
+"""The closed shape of one entry in a governance file.
 
-Both files close their key sets: an unknown key is a mistake someone made, not an extension
-point, and reading past one would silently ignore a policy somebody wrote down. These are the
-few checks both readers need, each returning the reason a caller reports rather than raising,
-so that one file's first problem is the one reported.
+Both files close their key sets at every level: an unknown key is a mistake somebody made
+rather than an extension point, and reading past one would ignore a policy that was written
+down. Every value in them decides something too, so a field of the wrong type is refused
+rather than carried into a decision as though somebody had written what it is read as.
+
+Each kind of entry declares its fields once, as a table, and one reader applies them. A check
+written per field at each call site is a check that gets forgotten at the next one, and the
+fields a governance file admits are exactly the ones its schema documents.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 
-__all__ = ["closed", "listed", "mapping", "one_of", "required", "text"]
-
-
-def closed(entry: Mapping[str, object], allowed: Iterable[str], where: str) -> str | None:
-    """No key beyond the ones this kind of entry defines."""
-    unknown = sorted(set(entry) - set(allowed))
-    return f"{where} has an unknown key `{unknown[0]}`" if unknown else None
+__all__ = ["Field", "Kind", "Shape", "listed", "mapping"]
 
 
-def required(entry: Mapping[str, object], names: Iterable[str], where: str) -> str | None:
-    missing = [name for name in names if name not in entry]
-    return f"{where} is missing `{missing[0]}`" if missing else None
+class Kind(StrEnum):
+    TEXT = "text"
+    INTEGER = "integer"
+    ENTRY = "entry"
+
+
+@dataclass(frozen=True)
+class Field:
+    """One field of an entry: what it is called, what it may hold, and whether it is needed."""
+
+    name: str
+    kind: Kind = Kind.TEXT
+    required: bool = False
+    values: tuple[str, ...] = ()
+    shape: Shape | None = None
+
+    def check(self, value: object, where: str) -> str | None:
+        if self.kind is Kind.ENTRY:
+            assert self.shape is not None
+            return self.shape.check(value, f"{where}'s `{self.name}`")
+        if self.kind is Kind.INTEGER:
+            if isinstance(value, bool) or not isinstance(value, int):
+                return f"{where}'s `{self.name}` is not an integer"
+            return None
+        if not isinstance(value, str):
+            return f"{where}'s `{self.name}` is not text"
+        if self.values and value not in self.values:
+            allowed = ", ".join(self.values)
+            return f"{where}'s `{self.name}` is `{value}`, which is not one of {allowed}"
+        return None
+
+
+@dataclass(frozen=True)
+class Shape:
+    """The fields one kind of entry may hold, and which of them it must."""
+
+    fields: tuple[Field, ...]
+
+    def check(self, value: object, where: str) -> str | None:
+        """Why ``value`` is not an entry of this shape, or ``None``."""
+        reason = mapping(value, where)
+        if reason:
+            return reason
+        assert isinstance(value, dict)
+        return self._closed(value, where) or self._members(value, where)
+
+    def _closed(self, entry: Mapping[str, object], where: str) -> str | None:
+        unknown = sorted(set(entry) - {field.name for field in self.fields})
+        return f"{where} has an unknown key `{unknown[0]}`" if unknown else None
+
+    def _members(self, entry: Mapping[str, object], where: str) -> str | None:
+        for field in self.fields:
+            if field.name not in entry:
+                if field.required:
+                    return f"{where} is missing `{field.name}`"
+                continue
+            reason = field.check(entry[field.name], where)
+            if reason:
+                return reason
+        return None
 
 
 def mapping(value: object, where: str) -> str | None:
@@ -30,14 +87,3 @@ def mapping(value: object, where: str) -> str | None:
 
 def listed(value: object, where: str) -> str | None:
     return None if isinstance(value, list) else f"{where} is not a list"
-
-
-def text(entry: Mapping[str, object], names: Iterable[str], where: str) -> str | None:
-    wrong = [name for name in names if name in entry and not isinstance(entry[name], str)]
-    return f"{where} has a `{wrong[0]}` that is not text" if wrong else None
-
-
-def one_of(value: object, allowed: Iterable[str], where: str) -> str | None:
-    if isinstance(value, str) and value in set(allowed):
-        return None
-    return f"{where} is `{value!r}`, which is not one of {', '.join(sorted(allowed))}"

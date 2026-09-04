@@ -110,6 +110,46 @@ def test_the_launcher_answers_for_the_repository_it_is_pointed_at(
 
 
 @needs_real_uv
+def test_the_launcher_refuses_a_repository_whose_governance_file_will_not_read(
+    plugin: RealPlugin, tmp_path: Path
+) -> None:
+    """The configuration error at the real boundary: exit 2, no report, and a document
+    automation can still read."""
+    repository = write_tree(
+        make_repository(tmp_path / "repository"),
+        {"CLAUDE.md": "# entry\n", "harness.manifest.yaml": "schemaVersion: 1\nrelations: {}\n"},
+    )
+
+    run = plugin.run("surface-audit", "--format", "json", "--root", str(repository))
+
+    assert run.returncode == 2, run.stderr
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert document["status"] == "usage-error"
+    assert document["data"] is None
+    assert [finding["code"] for finding in document["diagnostics"]] == ["HS-MANIFEST-INVALID"]
+
+
+@needs_real_uv
+def test_the_launcher_refuses_a_repository_whose_lock_will_not_read(
+    plugin: RealPlugin, tmp_path: Path
+) -> None:
+    repository = write_tree(
+        make_repository(tmp_path / "repository"),
+        {"CLAUDE.md": "# entry\n", "harness.lock.json": "{not json\n"},
+    )
+
+    run = plugin.run("surface-audit", "--format", "json", "--root", str(repository))
+
+    assert run.returncode == 2, run.stderr
+    document = json.loads(run.stdout)
+    validate_document(document)
+    assert document["status"] == "usage-error"
+    assert document["data"] is None
+    assert [finding["code"] for finding in document["diagnostics"]] == ["HS-LOCK-INVALID"]
+
+
+@needs_real_uv
 def test_a_source_only_update_runs_the_new_code_rather_than_a_cached_wheel(
     plugin: RealPlugin,
 ) -> None:

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from harness_smith.governance import LOCK, MANIFEST, Governance, read_governance
-from harness_smith.governance.paths import normalised
+from harness_smith.governance.paths import normalised, refused
 from tests.support import write_tree
 
 VALID_MANIFEST = """schemaVersion: 1
@@ -178,6 +178,100 @@ BROKEN_MANIFESTS = [
     ),
     ("a file that is not a mapping", "- one\n- two\n"),
     ("text that is not YAML", "schemaVersion: [1\n"),
+    ("a schema version this tool does not read", "schemaVersion: 999\nauthority: {}\n"),
+    ("a path key that is not text", "schemaVersion: 1\nauthority:\n  123: { authority: local }\n"),
+    (
+        "a path stepping outside the repository",
+        "schemaVersion: 1\nauthority:\n  ../outside.md: { authority: local }\n",
+    ),
+    ("an absolute path", "schemaVersion: 1\nauthority:\n  /etc/passwd: { authority: local }\n"),
+    (
+        "a drive-qualified path",
+        'schemaVersion: 1\nauthority:\n  "C:/x.md": { authority: local }\n',
+    ),
+    (
+        "a network share path",
+        'schemaVersion: 1\nauthority:\n  "//server/share/x.md": { authority: local }\n',
+    ),
+    ("a path naming nothing", 'schemaVersion: 1\nauthority:\n  "": { authority: local }\n'),
+    (
+        "a path holding a NUL",
+        'schemaVersion: 1\nauthority:\n  "a\\0b.md": { authority: local }\n',
+    ),
+    (
+        "a rationale that is not text",
+        "schemaVersion: 1\nauthority:\n  a.md: { authority: local, rationale: 3 }\n",
+    ),
+    (
+        "an owner naming a plugin that is not text",
+        "schemaVersion: 1\nauthority:\n  a.md: { managed-by: { plugin: 3 } }\n",
+    ),
+    (
+        "an owner with an operation that is not text",
+        "schemaVersion: 1\nauthority:\n  a.md: { managed-by: { plugin: p, operation: 7 } }\n",
+    ),
+    (
+        "a seed field that is not text",
+        "schemaVersion: 1\nauthority:\n  a.md:\n    authority: local\n"
+        "    adopted-from: { plugin: p, version: 1, source-revision: r, seed: s }\n",
+    ),
+    (
+        "a consumer plugin that is not text",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: 3\n      version: v\n"
+        "      consumer: c\n      binding: literal-path\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "a consumer version that is not text",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: 1\n"
+        "      consumer: c\n      binding: literal-path\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "a consumer name that is not text",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      consumer: 9\n      binding: literal-path\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "an evidence path that is not text",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      consumer: c\n      binding: literal-path\n"
+        "      evidence: { path: 4, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "a locator value that is not text",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      consumer: c\n      binding: literal-path\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: 5 } }\n",
+    ),
+    (
+        "a resolution field that is not text",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      consumer: c\n      binding: non-literal\n"
+        "      resolution: { kind: k, confirmed-by: 2 }\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "a resolution with an unknown key",
+        "schemaVersion: 1\nconsumers:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      consumer: c\n      binding: non-literal\n"
+        "      resolution: { kind: k, confirmed-by: human, guess: yes }\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "a writer confirmed-by that is not text",
+        "schemaVersion: 1\nwriters:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      writer: w\n      mode: regenerate\n      confirmed-by: 1\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
+    (
+        "a writer source-revision that is not text",
+        "schemaVersion: 1\nwriters:\n  a.md:\n    - plugin: p\n      version: v\n"
+        "      writer: w\n      mode: regenerate\n      confirmed-by: human\n"
+        "      source-revision: 6\n"
+        "      evidence: { path: p.md, locator: { type: contains-text, value: x } }\n",
+    ),
 ]
 
 
@@ -202,6 +296,16 @@ GENERATED: dict[str, object] = {
     "source": "s",
     "sourceVersion": "1",
     "sha256": "y",
+}
+
+IMPORT_URL: dict[str, object] = {**GENERATED, "sourceUrl": "https://example.test/x.md"}
+
+SEED: dict[str, object] = {"source": "s", "sourceVersion": "1", "sha256": "y"}
+
+ADOPTED: dict[str, object] = {
+    "provenance": "adopted",
+    "baselineSha256": "x",
+    "adoptedFrom": SEED,
 }
 
 
@@ -281,6 +385,52 @@ BROKEN_LOCKS = [
             }
         },
     ),
+    ("a schema version this tool does not read", {"schemaVersion": 999}),
+    ("a standard id that is not text", {"standard": {"id": 1, "version": "1"}}),
+    (
+        "an entrypoint path that is not text",
+        {"entrypoint": {"runtime": "r", "path": 1, "template": "t", "version": "1"}},
+    ),
+    ("a generated entry carrying an import URL", {"artifacts": {"a.md": IMPORT_URL}}),
+    (
+        "a generated entry carrying a licence",
+        {"artifacts": {"a.md": {**GENERATED, "license": "MIT"}}},
+    ),
+    (
+        "an imported entry whose URL is not text",
+        {"artifacts": {"a.md": {**GENERATED, "provenance": "imported", "sourceUrl": 1}}},
+    ),
+    (
+        "a source revision that is not text",
+        {"artifacts": {"a.md": {**GENERATED, "sourceRevision": 1}}},
+    ),
+    (
+        "a declaration digest that is not text",
+        {"artifacts": {"a.md": {**GENERATED, "declarationDigest": 1}}},
+    ),
+    (
+        "an adopted entry carrying its descriptor at the top",
+        {"artifacts": {"a.md": {**ADOPTED, "source": "s"}}},
+    ),
+    (
+        "an adopted seed carrying an import URL",
+        {
+            "artifacts": {
+                "a.md": {**ADOPTED, "adoptedFrom": {**SEED, "sourceUrl": "https://example.test"}}
+            }
+        },
+    ),
+    (
+        "an adopted seed missing its digest",
+        {"artifacts": {"a.md": {**ADOPTED, "adoptedFrom": {"source": "s", "sourceVersion": "1"}}}},
+    ),
+    ("an artifact keyed by an absolute path", {"artifacts": {"/etc/passwd": GENERATED}}),
+    ("an artifact keyed outside the repository", {"artifacts": {"../x.md": GENERATED}}),
+    ("an artifact keyed by a drive", {"artifacts": {"C:/x.md": GENERATED}}),
+    (
+        "an artifact whose `#` is not followed by a pointer",
+        {"artifacts": {"a.json#hooks": GENERATED}},
+    ),
 ]
 
 
@@ -347,10 +497,90 @@ def test_a_path_is_compared_by_one_spelling(written: str, compared: str) -> None
     assert normalised(written) == compared
 
 
-def test_normalisation_keeps_a_parent_step() -> None:
-    """Removing a `..` lexically names a different file whenever a symlink is in the way, and
-    resolving it against this machine's filesystem would answer differently elsewhere."""
-    assert normalised("./docs/../x.md") == "docs/../x.md"
+@pytest.mark.parametrize(
+    "key",
+    ["../x.md", "docs/../x.md", "/etc/passwd", "//server/share/x.md", "C:/x.md", "", "a\x00b.md"],
+)
+def test_a_key_that_is_not_a_repository_relative_path_is_refused(key: str) -> None:
+    """Collapsing a `..` lexically names a different file whenever a symlink is in the way, and
+    resolving it against this machine's filesystem would answer differently elsewhere. Neither
+    answer is one to key a policy by, so the key is refused rather than repaired."""
+    assert refused(key, "the `authority` section") is not None
+
+
+def test_a_locator_keys_a_declaration_held_inside_a_container() -> None:
+    """A hook is addressed by a pointer into the file that holds it, and the lock keys its
+    entry the same way."""
+    locator = ".claude/settings.json#/hooks/PostToolUse/0"
+
+    assert refused(locator, "the lock", locator=True) is None
+    assert normalised("./.claude//settings.json#/hooks/PostToolUse/0") == locator
+
+
+def test_a_pointer_is_not_a_path_the_manifest_may_key_by() -> None:
+    assert refused(".claude/settings.json#/hooks", "the `authority` section") is not None
+
+
+def test_a_lock_records_a_hook_fragment_at_its_locator(tmp_path: Path) -> None:
+    entry = {
+        "provenance": "generated",
+        "baselineSha256": "b" * 64,
+        "declarationDigest": "d" * 64,
+        "source": "harness-smith:standard/default",
+        "sourceVersion": "1.0.0",
+        "sha256": "a" * 64,
+    }
+    locator = ".claude/settings.json#/hooks/PostToolUse/0"
+
+    governance = read(tmp_path, {LOCK: lock_with({"artifacts": {locator: entry}})})
+
+    assert governance.lock.valid
+    assert governance.diagnostics == ()
+    assert governance.lock.artifacts[locator]["declarationDigest"] == "d" * 64
+
+
+def test_an_imported_artifact_keeps_the_url_and_licence_it_was_taken_under(
+    tmp_path: Path,
+) -> None:
+    """`sourceUrl` and `license` describe an import, and are refused under any other
+    provenance."""
+    entry = {
+        "provenance": "imported",
+        "baselineSha256": "b" * 64,
+        "source": "example:doc",
+        "sourceVersion": "2.0.0",
+        "sha256": "a" * 64,
+        "sourceUrl": "https://example.test/doc.md",
+        "license": "CC-BY-4.0",
+    }
+
+    governance = read(tmp_path, {LOCK: lock_with({"artifacts": {"docs/x.md": entry}})})
+
+    assert governance.lock.valid
+    assert governance.lock.artifacts["docs/x.md"]["sourceUrl"] == "https://example.test/doc.md"
+
+
+def test_a_governance_path_that_resolves_nowhere_is_not_a_repository_that_declared_nothing(
+    tmp_path: Path,
+) -> None:
+    """A symbolic link with nothing at the other end is a file somebody meant to be there."""
+    root = write_tree(tmp_path / "repository", {"README.md": "# readme\n"})
+    (root / MANIFEST).symlink_to(root / "elsewhere.yaml")
+
+    governance = read_governance(root)
+
+    assert codes(governance) == ["HS-MANIFEST-INVALID"]
+    assert governance.manifest.present is True
+
+
+def test_a_governance_file_reached_through_a_link_is_read(tmp_path: Path) -> None:
+    root = write_tree(tmp_path / "repository", {"elsewhere.yaml": VALID_MANIFEST})
+    (root / MANIFEST).symlink_to(root / "elsewhere.yaml")
+
+    governance = read_governance(root)
+
+    assert governance.manifest.valid
+    assert governance.diagnostics == ()
 
 
 def test_the_lock_records_an_approved_baseline_and_no_current_digest(tmp_path: Path) -> None:

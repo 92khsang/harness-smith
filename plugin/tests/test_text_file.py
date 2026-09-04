@@ -6,6 +6,7 @@ read": a caller that cannot tell them apart reads a botched file as a deliberate
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -43,8 +44,57 @@ def test_a_directory_at_the_path_is_unreadable_rather_than_absent(tmp_path: Path
     file = read_text_file(path)
 
     assert file.state is TextFileState.UNREADABLE
-    assert file.reason
+    assert file.reason == "the path is not a regular file"
     assert file.text == ""
+
+
+def test_a_link_with_nothing_at_the_other_end_is_unreadable_rather_than_absent(
+    tmp_path: Path,
+) -> None:
+    """The entry is there, and reading it as silence would let a broken link pass for a
+    deliberate decision to declare nothing."""
+    path = tmp_path / "harness.manifest.yaml"
+    path.symlink_to(tmp_path / "gone.yaml")
+
+    file = read_text_file(path)
+
+    assert file.state is TextFileState.UNREADABLE
+    assert file.reason == "the path is a symbolic link with nothing at the other end"
+
+
+def test_a_link_to_a_file_is_read_as_the_file_it_names(tmp_path: Path) -> None:
+    (tmp_path / "elsewhere.yaml").write_text("schemaVersion: 1\n", encoding="utf-8")
+    path = tmp_path / "harness.manifest.yaml"
+    path.symlink_to(tmp_path / "elsewhere.yaml")
+
+    file = read_text_file(path)
+
+    assert file.state is TextFileState.PRESENT
+    assert file.text == "schemaVersion: 1\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="the platform has no named pipes")
+def test_a_named_pipe_answers_instead_of_waiting_for_a_writer(tmp_path: Path) -> None:
+    """A pipe with no writer would hold a blocking read open for as long as nobody writes, so
+    the open is non-blocking and what it found is answered on."""
+    path = tmp_path / "harness.lock.json"
+    os.mkfifo(path)
+
+    file = read_text_file(path)
+
+    assert file.state is TextFileState.UNREADABLE
+    assert file.reason == "the path is not a regular file"
+
+
+def test_no_reason_repeats_what_the_operating_system_called_it(tmp_path: Path) -> None:
+    """A message built from `strerror` differs by platform and locale, and a result document
+    that has to read the same on two machines cannot carry one."""
+    directory = tmp_path / "harness.lock.json"
+    directory.mkdir()
+
+    reasons = {read_text_file(directory).reason, read_text_file(tmp_path / "gone.json").reason}
+
+    assert not any("Is a directory" in reason or "No such file" in reason for reason in reasons)
 
 
 def test_bytes_that_never_became_text_are_unreadable(tmp_path: Path) -> None:

@@ -43,7 +43,7 @@ class SurfaceAudit(Operation):
         a partial result from a scan that should not have started.
         """
         governance = read_governance(request.repository_root)
-        if governance.unread:
+        if governance.invalid:
             return OperationOutcome(data=None, diagnostics=governance.diagnostics)
         discovery = claude_code.discover(DiscoveryRequest(request.repository_root))
         return OperationOutcome(

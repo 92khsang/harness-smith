@@ -7,10 +7,16 @@ which is only safe because nothing in it is a human choice: those live in the ma
 `baselineSha256` is the approved drift baseline, the digest at the moment the content was last
 generated, imported or adopted. It is not a current measurement. The digest of what is on disk
 now is computed at scan time and never written here, so a lock diff shows change somebody
-approved rather than change that merely happened.
+approved rather than change that merely happened. Computing it, and comparing it against this
+baseline, is #36's.
 
 The lock carries no timestamps, machine paths, user identity or session identifiers, for the
 same reason: a diff that moves without the content moving is a diff nobody can read.
+
+What an entry may hold depends on its provenance, so each provenance has its own closed shape
+rather than one shape loose enough for all three. `sourceUrl` and `license` describe an import
+and are refused everywhere else, and an `adopted` entry keeps its origin under `adoptedFrom`
+rather than beside its own baseline, where the two would be indistinguishable.
 """
 
 from __future__ import annotations
@@ -18,8 +24,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from harness_smith.governance.paths import normalised
-from harness_smith.governance.shape import closed, mapping, one_of, required, text
+from harness_smith.governance.paths import normalised, refused
+from harness_smith.governance.shape import Field, Kind, Shape
 from harness_smith.json_document import JsonDocumentState, own_repeated_names, parse_json_document
 from harness_smith.text_file import TextFile, TextFileState
 
@@ -28,21 +34,54 @@ __all__ = ["LOCK", "Lock", "read_lock"]
 LOCK = "harness.lock.json"
 
 SCHEMA_VERSION = "schemaVersion"
+
+# The one version this tool reads, for the reason the manifest reads one: a version field says
+# the rules can change, and reading a later file under these rules is guessing that they did not.
+SUPPORTED_VERSION = 1
+
 ARTIFACTS = "artifacts"
 TOP_LEVEL = (SCHEMA_VERSION, "standard", "entrypoint", ARTIFACTS)
-STANDARD_KEYS = ("id", "version")
-ENTRYPOINT_KEYS = ("runtime", "path", "template", "version")
+
+STANDARD = Shape((Field("id", required=True), Field("version", required=True)))
+
+ENTRYPOINT = Shape(
+    (
+        Field("runtime", required=True),
+        Field("path", required=True),
+        Field("template", required=True),
+        Field("version", required=True),
+    )
+)
 
 PROVENANCES = ("generated", "imported", "adopted")
+PROVENANCE = "provenance"
 BASELINE = "baselineSha256"
 ADOPTED_FROM = "adoptedFrom"
 
-# The one descriptor shape every provenance carries, so an artifact keeps its origin after it
-# has been adopted. `sourceUrl` and `license` describe an import and appear only there.
-DESCRIPTOR_REQUIRED = ("source", "sourceVersion", "sha256")
-DESCRIPTOR_KEYS = (*DESCRIPTOR_REQUIRED, "sourceRevision", "sourceUrl", "license")
+# The descriptor every provenance carries, so an artifact keeps its origin after adoption.
+DESCRIPTOR: tuple[Field, ...] = (
+    Field("source", required=True),
+    Field("sourceVersion", required=True),
+    Field("sha256", required=True),
+    Field("sourceRevision"),
+)
+IMPORT_DESCRIPTOR: tuple[Field, ...] = (*DESCRIPTOR, Field("sourceUrl"), Field("license"))
 
-ENTRY_KEYS = ("provenance", BASELINE, ADOPTED_FROM, "declarationDigest", *DESCRIPTOR_KEYS)
+# A hook fragment's entry carries the digest of the declaration alone, which is what recognises
+# it after it has moved inside its container.
+COMMON: tuple[Field, ...] = (
+    Field(PROVENANCE, required=True, values=PROVENANCES),
+    Field(BASELINE, required=True),
+    Field("declarationDigest"),
+)
+
+SEED = Shape(DESCRIPTOR)
+
+ENTRY_SHAPES: Mapping[str, Shape] = {
+    "generated": Shape((*COMMON, *DESCRIPTOR)),
+    "imported": Shape((*COMMON, *IMPORT_DESCRIPTOR)),
+    "adopted": Shape((*COMMON, Field(ADOPTED_FROM, Kind.ENTRY, required=True, shape=SEED))),
+}
 
 
 @dataclass(frozen=True)
@@ -80,11 +119,11 @@ def read_lock(file: TextFile) -> Lock:
     repeated = own_repeated_names(members)
     reason = (
         (f"the lock declares `{repeated[0]}` more than once" if repeated else None)
-        or closed(members, TOP_LEVEL, "the lock")
-        or required(members, TOP_LEVEL, "the lock")
+        or _closed(members)
+        or _missing(members)
         or _version(members)
-        or _object(members["standard"], STANDARD_KEYS, "the lock's `standard`")
-        or _object(members["entrypoint"], ENTRYPOINT_KEYS, "the lock's `entrypoint`")
+        or STANDARD.check(members["standard"], "the lock's `standard`")
+        or ENTRYPOINT.check(members["entrypoint"], "the lock's `entrypoint`")
     )
     if reason:
         return Lock(present=True, reason=reason)
@@ -104,24 +143,42 @@ def read_lock(file: TextFile) -> Lock:
     )
 
 
+def _closed(members: Mapping[str, object]) -> str | None:
+    unknown = sorted(set(members) - set(TOP_LEVEL))
+    return f"the lock has an unknown key `{unknown[0]}`" if unknown else None
+
+
+def _missing(members: Mapping[str, object]) -> str | None:
+    missing = [name for name in TOP_LEVEL if name not in members]
+    return f"the lock is missing `{missing[0]}`" if missing else None
+
+
 def _version(members: Mapping[str, object]) -> str | None:
     version = members[SCHEMA_VERSION]
-    if not isinstance(version, int) or isinstance(version, bool):
+    if isinstance(version, bool) or not isinstance(version, int):
         return f"the lock has a `{SCHEMA_VERSION}` that is not an integer"
+    if version != SUPPORTED_VERSION:
+        return (
+            f"the lock declares `{SCHEMA_VERSION}` {version}, "
+            f"and this tool reads version {SUPPORTED_VERSION}"
+        )
     return None
 
 
 def _artifacts(value: object) -> Mapping[str, Mapping[str, object]] | str:
-    reason = mapping(value, f"the lock's `{ARTIFACTS}`")
-    if reason:
-        return reason
-    assert isinstance(value, dict)
+    where = f"the lock's `{ARTIFACTS}`"
+    if not isinstance(value, dict):
+        return f"{where} is not a mapping"
     repeated = own_repeated_names(value)
     if repeated:
         return f"the lock names `{repeated[0]}` twice"
     entries: dict[str, Mapping[str, object]] = {}
     for path, entry in value.items():
-        key = normalised(str(path))
+        reason = refused(path, where, locator=True)
+        if reason:
+            return reason
+        assert isinstance(path, str)
+        key = normalised(path)
         if key in entries:
             return f"the lock names `{key}` twice"
         read = _entry(key, entry)
@@ -134,47 +191,20 @@ def _artifacts(value: object) -> Mapping[str, Mapping[str, object]] | str:
 def _entry(path: str, entry: object) -> Mapping[str, object] | str:
     """One artifact's provenance and the descriptor that goes with it.
 
-    A `generated` or `imported` entry carries its descriptor at the top; an `adopted` one
-    carries it under `adoptedFrom`, describing the state its local content diverged from, while
+    The provenance decides which shape the rest of the entry has, so it is read first: a
+    `generated` or `imported` entry carries its descriptor at the top, and an `adopted` one
+    carries it under `adoptedFrom`, describing the state its local content diverged from while
     its own baseline records the approved local content.
     """
     where = f"the lock entry for `{path}`"
-    reason = (
-        mapping(entry, where)
-        or closed(entry, ENTRY_KEYS, where)  # type: ignore[arg-type]
-        or required(entry, ("provenance", BASELINE), where)  # type: ignore[arg-type]
-    )
-    if reason:
-        return reason
-    assert isinstance(entry, dict)
-    reason = (
-        one_of(entry["provenance"], PROVENANCES, f"{where}'s `provenance`")
-        or text(entry, (BASELINE, "declarationDigest"), where)
-        or _descriptor(entry, where)
-    )
+    if not isinstance(entry, dict):
+        return f"{where} is not a mapping"
+    if PROVENANCE not in entry:
+        return f"{where} is missing `{PROVENANCE}`"
+    provenance = entry[PROVENANCE]
+    shape = ENTRY_SHAPES.get(provenance) if isinstance(provenance, str) else None
+    if shape is None:
+        allowed = ", ".join(PROVENANCES)
+        return f"{where}'s `{PROVENANCE}` is `{provenance}`, which is not one of {allowed}"
+    reason = shape.check(entry, where)
     return reason if reason else entry
-
-
-def _descriptor(entry: Mapping[str, object], where: str) -> str | None:
-    if entry["provenance"] == "adopted":
-        if ADOPTED_FROM not in entry:
-            return f"{where} is adopted and is missing `{ADOPTED_FROM}`"
-        return _object(entry[ADOPTED_FROM], DESCRIPTOR_KEYS, f"{where}'s `{ADOPTED_FROM}`", True)
-    if ADOPTED_FROM in entry:
-        return f"{where} is not adopted and carries `{ADOPTED_FROM}`"
-    return _object(entry, DESCRIPTOR_KEYS, where, True, ENTRY_KEYS)
-
-
-def _object(
-    value: object,
-    allowed: tuple[str, ...],
-    where: str,
-    descriptor: bool = False,
-    keys: tuple[str, ...] | None = None,
-) -> str | None:
-    reason = mapping(value, where) or closed(value, keys or allowed, where)  # type: ignore[arg-type]
-    if reason:
-        return reason
-    assert isinstance(value, dict)
-    needed = DESCRIPTOR_REQUIRED if descriptor else allowed
-    return required(value, needed, where) or text(value, needed, where)
